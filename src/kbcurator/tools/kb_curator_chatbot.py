@@ -22,7 +22,8 @@ import re
 from urllib.parse import urlparse
 from ..utils.access_validation import validate_user_workspace_access
 from ..utils.request_context import request_var
-from .user_management_system import Session, UserMap
+# from tools.userManagementSystem import Session, UserMap
+from ..utils.db import db
 from fastmcp.server.dependencies import get_http_headers
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
@@ -860,9 +861,9 @@ async def message_gpt(
     #     return {"error": "Unauthorized: user_id in request does not match user in token"}
 
     # Check if user is mapped to this workspace
-    session = Session()
+    session = db.Session()
     try:
-        user_map = session.query(UserMap).filter_by(workspace_id=workspace_id, user_id=user_id, is_active=True).first()
+        user_map = session.query(db.UserMap).filter_by(workspace_id=workspace_id, user_id=user_id, is_active=True).first()
         if not user_map:
             return {"error": "You are not authorized to access this workspace."}
     except Exception as e:
@@ -932,9 +933,9 @@ def get_conversation_history(workspace_id: str = None, user_id: str = None, limi
         return {"error": "Unauthorized: user_id in request does not match user in token"}
 
     # Check if user is mapped to this workspace
-    session_db = Session()
+    session_db = db.Session()
     try:
-        user_map = session_db.query(UserMap).filter_by(workspace_id=workspace_id, user_id=jwt_user_id, is_active=True).first()
+        user_map = session_db.query(db.UserMap).filter_by(workspace_id=workspace_id, user_id=jwt_user_id, is_active=True).first()
         if not user_map:
             session_db.close()
             return {"error": "You are not authorized to access this workspace."}
@@ -1026,9 +1027,9 @@ def load_conversation(workspace_id: str, user_id: str, session_id: str) -> Dict[
         return {"error": "Unauthorized: user_id in request does not match user in token"}
 
     # Check if user is mapped to this workspace
-    session_db = Session()
+    session_db = db.Session()
     try:
-        user_map = session_db.query(UserMap).filter_by(workspace_id=workspace_id, user_id=jwt_user_id, is_active=True).first()
+        user_map = session_db.query(db.UserMap).filter_by(workspace_id=workspace_id, user_id=jwt_user_id, is_active=True).first()
         if not user_map:
             session_db.close()
             return {"error": "You are not authorized to access this workspace."}
@@ -1071,9 +1072,9 @@ def delete_conversation(workspace_id: str, user_id: str, session_id: str) -> Dic
         return {"error": "Unauthorized: user_id in request does not match user in token"}
 
     # Check if user is mapped to this workspace
-    session_db = Session()
+    session_db = db.Session()
     try:
-        user_map = session_db.query(UserMap).filter_by(workspace_id=workspace_id, user_id=jwt_user_id, is_active=True).first()
+        user_map = session_db.query(db.UserMap).filter_by(workspace_id=workspace_id, user_id=jwt_user_id, is_active=True).first()
         if not user_map:
             session_db.close()
             return {"error": "You are not authorized to access this workspace."}

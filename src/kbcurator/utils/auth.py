@@ -168,51 +168,39 @@ from typing import Any, Dict, Optional, Tuple
 from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 import jwt
-from dotenv import load_dotenv
 import redis
 import psycopg2
 import psycopg2.extras
 
-try:
-    import certifi
-    _CERTIFI_AVAILABLE = True
-except ImportError:
-    _CERTIFI_AVAILABLE = False
+# Centralized config and enums
+from .config import settings
 
-load_dotenv()
+from .constants import Role
+
 
 logger = logging.getLogger(__name__)
 
-# =============================================================================
-# PostgreSQL configuration (env-driven, same vars as other agents)
-# =============================================================================
-POSTGRESQL_HOST: str = os.getenv("POSTGRESQL_DATABASE_HOST", "")
-POSTGRESQL_PORT: str = os.getenv("POSTGRESQL_DATABASE_PORT", "5432")
-POSTGRESQL_DB: str = os.getenv("POSTGRESQL_DATABASE_DATABASE", "")
-POSTGRESQL_USER: str = os.getenv("POSTGRESQL_DATABASE_USER", "")
-POSTGRESQL_PASSWORD: str = os.getenv("POSTGRESQL_DATABASE_PASSWORD", "")
 
-# =============================================================================
-# JWT configuration (env-driven)
-# =============================================================================
-JWT_SECRET = os.getenv("JWT_SECRET", "change-this-in-prod")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRY = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRY_SECONDS", "3600"))     # 60 minutes default
-REFRESH_TOKEN_EXPIRY = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRY_SECONDS", "86400"))  # 24 hours default
+# Use centralized config
+POSTGRESQL_HOST = settings.POSTGRES_HOST
+POSTGRESQL_PORT = settings.POSTGRES_PORT
+POSTGRESQL_DB = settings.POSTGRES_DB
+POSTGRESQL_USER = settings.POSTGRES_USER
+POSTGRESQL_PASSWORD = settings.POSTGRES_PASSWORD
 
-# Transport behavior flags
-# - ENCODE: return Base64URL-wrapped token in the JSON response body (default: true)
-# - SET_ACCESS_COOKIE: also set access token as HttpOnly cookie via middleware (default: true)
-# - RETURN_RAW_ACCESS: include raw token in body (default: false) -> safer default: do NOT return raw JWT
-JWT_TRANSPORT_ENCODE = os.getenv("JWT_TRANSPORT_ENCODE", "true").strip().lower() == "true"
-JWT_SET_ACCESS_COOKIE = os.getenv("JWT_SET_ACCESS_COOKIE", "true").strip().lower() == "true"
-JWT_RETURN_RAW_ACCESS = os.getenv("JWT_RETURN_RAW_ACCESS", "false").strip().lower() == "true"
+JWT_SECRET = settings.JWT_SECRET
+JWT_ALGORITHM = settings.JWT_ALGORITHM
+ACCESS_TOKEN_EXPIRY = settings.JWT_ACCESS_TOKEN_EXPIRY_SECONDS
+REFRESH_TOKEN_EXPIRY = settings.JWT_REFRESH_TOKEN_EXPIRY_SECONDS
 
-# Redis connection configuration
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
-REDIS_SSL = os.getenv("REDIS_SSL", "true").lower() == "true"
+JWT_TRANSPORT_ENCODE = settings.JWT_TRANSPORT_ENCODE
+JWT_SET_ACCESS_COOKIE = settings.JWT_SET_ACCESS_COOKIE
+JWT_RETURN_RAW_ACCESS = settings.JWT_RETURN_RAW_ACCESS
+
+REDIS_HOST = settings.REDIS_HOST
+REDIS_PORT = settings.REDIS_PORT
+REDIS_PASSWORD = settings.REDIS_PASSWORD
+REDIS_SSL = settings.REDIS_SSL
 
 # Initialize Redis client with proper configuration for Azure Redis
 try:
@@ -570,11 +558,13 @@ def _issue_backend_jwt(user: Dict[str, Any]) -> str:
     Includes jti so the token can be individually revoked via Redis.
     """
     now = datetime.now(timezone.utc)
+    role_id = user.get('role_id', None)
     payload = {
         "user_id": user["user_id"],
         "sub": str(user["user_id"]),
         "email": user["email_id"],
-        "is_admin": bool(user.get("is_admin", False)),
+        "is_admin": True if (role_id == Role.ADMIN.id) else False,
+        "role_id": role_id,
         "jti": uuid.uuid4().hex,
         "token_type": "access",
         "iat": int(now.timestamp()),
@@ -629,8 +619,8 @@ def _create_user_with_workspace(email: str, workspace_id: int) -> Dict[str, Any]
             # Create user
             cur.execute(
                 """
-                INSERT INTO public.users (namespace, email_id, is_active, is_admin, created_date, last_updated)
-                VALUES (%s, %s, TRUE, FALSE, %s, %s)
+                INSERT INTO public.users (namespace, email_id, is_active, is_admin, created_date, last_updated, role_id)
+                VALUES (%s, %s, TRUE, FALSE, %s, %s, 1)
                 RETURNING *
                 """,
                 ("default", email.strip().lower(), now, now),

@@ -2,93 +2,29 @@ from ..utils.access_validation import validate_user_workspace_access
 from ..server.server import mcp
 import psycopg2
 from configparser import ConfigParser
-from sqlalchemy import create_engine, func, MetaData
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship, sessionmaker
-from sqlalchemy.ext.automap import automap_base
-from configparser import ConfigParser
-import os
+from sqlalchemy import func
+from ..utils.db import db
+from os import getenv
 import sys
-from urllib.parse import quote_plus
-from dotenv import load_dotenv
 from ..utils.auth import create_jwt_token, verify_jwt_token, create_refresh_token, verify_refresh_token
 from ..utils.request_context import request_var
 from sqlalchemy import select, func as sql_func
 
 # --- New Import for Password Hashing ---
 from passlib.hash import argon2
-from threading import RLock
-from ..utils.auth import extract_token_from_headers, revoke_token
-from ..utils.auth import JWT_TRANSPORT_ENCODE, JWT_RETURN_RAW_ACCESS, JWT_SET_ACCESS_COOKIE, encode_for_transport
+from ..utils.auth import (
+    JWT_TRANSPORT_ENCODE,
+    JWT_RETURN_RAW_ACCESS,
+    JWT_SET_ACCESS_COOKIE,
+    extract_token_from_headers,
+    _assign_user_to_workspace,
+    revoke_token, 
+    _fetch_user_by_email,
+    encode_for_transport
+)
 
-from threading import RLock
-from ..utils.auth import extract_token_from_headers, revoke_token
-from ..utils.auth import JWT_TRANSPORT_ENCODE, JWT_RETURN_RAW_ACCESS, JWT_SET_ACCESS_COOKIE, encode_for_transport
+from ..utils.constants import DefaulValue, Role
 
-
-load_dotenv(os.path.abspath(os.path.join(os.getcwd(),'.env')))
-
-# Use environment variables from .env for PostgreSQL config
-POSTGRES_HOST = os.getenv('POSTGRESQL_DATABASE_HOST')
-POSTGRES_PORT = os.getenv('POSTGRESQL_DATABASE_PORT')
-POSTGRES_DB = 'forgex_coforge'
-POSTGRES_USER = os.getenv('POSTGRESQL_DATABASE_USER')
-POSTGRES_PASSWORD = os.getenv('POSTGRESQL_DATABASE_PASSWORD')
-POSTGRES_TABLE_WORKSPACE = os.getenv('POSTGRESQL_DATABASE_WORKSPACE_TABLE', 'workspace_master')
-POSTGRES_TABLE_USER = os.getenv('POSTGRESQL_DATABASE_USER_TABLE', 'user_details')
-
-connection_string = f"postgresql+psycopg2://{POSTGRES_USER}:{quote_plus(POSTGRES_PASSWORD)}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-
-# Create engine and reflect the database
-engine = create_engine(connection_string)
-metadata = MetaData()
-metadata.reflect(engine)
-
-# Automap base
-Base = automap_base(metadata=metadata)
-Base.prepare()
-# Create a session
-Session = sessionmaker(bind=engine)
-# session = Session()
-
-session_lock = RLock()
-
-AgentIndustryMap = Base.classes.agent_industry_mapping
-AgentRegionMap = Base.classes.agent_region_mapping
-AgentSubIndustryMap = Base.classes.agent_subindustry_mapping
-AgentIntentMap = Base.classes.agent_intent_mapping
-ToolIndustryMap = Base.classes.tool_industry_mapping
-ToolRegionMap = Base.classes.tool_region_mapping
-ToolIntentMap = Base.classes.tool_intent_mapping
-Workspace = Base.classes.workspace_master
-AgentMap = Base.classes.workspace_agents_mapping_2
-ToolMap = Base.classes.workspace_tools_mapping
-UserMap = Base.classes.workspace_users_mapping
-Agent = Base.classes.agents_details
-Tool = Base.classes.tools_details
-User = Base.classes.users
-Category = Base.classes.category_master
-Industry = Base.classes.industry_master
-SubIndustry = Base.classes.subindustry_master
-AgentsCMS = Base.classes.agents_cms
-ToolsCMS = Base.classes.tool_cms
-Integrations = Base.classes.integrations
-Intent = Base.classes.intent_master
-KnowledgeBase = Base.classes.knowledge_base_master
-AgentCMSIntegrationMap = Base.classes.agent_cms_integration_mapping
-FavouriteMappingAgent = Base.classes.favourite_mapping_agent
-FavouriteMappingTool = Base.classes.favourite_mapping_tool
-WorkspaceIndustrySubIndustryMap = Base.classes.workspace_industry_intent_mapping
-Role = Base.classes.role_master
-UserRoleMap = Base.classes.user_role_mapping
-TMUIntegrationMapping = Base.classes.tool_workspace_user_integration_mapping
-AMUIntegrationMapping = Base.classes.agent_workspace_user_integration_mapping
-# Optional mapping tables for workspace attributes
-ToolSubIndustryMap = getattr(Base.classes, 'tool_subindustry_mapping', None)
-ToolCMSIntegrationMap = getattr(Base.classes, 'tool_cms_integration_mapping', None)
-WorkspaceRegionMap = getattr(Base.classes, 'workspace_region_mapping', None)
-WorkspaceIntentMap = getattr(Base.classes, 'workspace_intent_mapping', None)
-WorkspaceKeywordMap = getattr(Base.classes, 'workspace_keyword_mapping', None)
 
 @mcp.tool()
 def fetch_user_workflow_stage(user_id: int, workspace_id: int):
@@ -111,14 +47,14 @@ def fetch_user_workflow_stage(user_id: int, workspace_id: int):
     if str(user_id) != str(jwt_user_id):
         return {"error": "You are not authorized to fetch this user's workflow stage."}
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         # Fetch active role mapping for user in workspace
-        role_map = session.query(UserRoleMap).filter(
-            UserRoleMap.user_id == user_id,
-            UserRoleMap.workspace_id == workspace_id,
-            UserRoleMap.is_active == True
+        role_map = session.query(db.UserRoleMap).filter(
+                db.UserRoleMap.user_id == user_id,
+                db.UserRoleMap.workspace_id == workspace_id,
+                db.UserRoleMap.is_active == True
         ).first()
         if not role_map:
             return {"workflow_stage": "ALL", "role_id": None, "message": "No active role mapping found."}
@@ -128,7 +64,7 @@ def fetch_user_workflow_stage(user_id: int, workspace_id: int):
             return {"workflow_stage": "ALL", "role_id": None, "message": "Role ID not found in mapping."}
 
         # Fetch workflow_stage from role_master table
-        role = session.query(Role).filter(Role.role_id == role_id, Role.is_active == True).first()
+        role = session.query(db.Role).filter(db.Role.role_id == role_id, db.Role.is_active == True).first()
         workflow_stage = getattr(role, "workflow_stage", None)
         if not workflow_stage:
             return {"workflow_stage": "ALL", "role_id": role_id, "message": "No workflow_stage set for role."}
@@ -163,13 +99,13 @@ def update_user_kb_toggle(user_id: int, workspace_id: int, can_curate_kb: bool):
     if str(user_id) != str(jwt_user_id) and not is_admin:
         return {"error": "You are not authorized to update this user."}
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
-        user_map = session.query(UserMap).filter(
-            UserMap.user_id == user_id,
-            UserMap.workspace_id == workspace_id,
-            UserMap.is_active == True
+        user_map = session.query(db.UserMap).filter(
+            db.UserMap.user_id == user_id,
+            db.UserMap.workspace_id == workspace_id,
+            db.UserMap.is_active == True
         ).first()
         if not user_map:
             return {"error": "User mapping not found or inactive for this workspace."}
@@ -198,19 +134,18 @@ def login_user(email: str, password: str):
             workspaces: [...]
             message: str
     """
-    from sqlalchemy import func
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         normalized_email = email.strip().lower()
-        user = session.query(User).filter(func.lower(User.email_id) == normalized_email).first()
+        user = session.query(db.User).filter(func.lower(db.User.email_id) == normalized_email).first()
 
         if user and hasattr(user, 'password'):
             user_db_password = getattr(user, 'password', None)
             password_matches = False
 
             if user_db_password is None:
-                if password == "forge-X@coforge":
+                if password == DefaulValue.PASSWORD.value:
                     password_matches = True
             elif user_db_password.startswith('$argon2'):
                 try:
@@ -231,16 +166,16 @@ def login_user(email: str, password: str):
 
                 # Single-query fetch for user mappings, roles, workspaces (active only)
                 user_workspace_data = (
-                    session.query(UserMap, Workspace, UserRoleMap)
-                    .join(Workspace, UserMap.workspace_id == Workspace.workspace_id)
+                    session.query(db.UserMap, db.Workspace, db.UserRoleMap)
+                    .join(db.Workspace, db.UserMap.workspace_id == db.Workspace.workspace_id)
                     .outerjoin(
-                        UserRoleMap,
-                        (UserRoleMap.user_id == UserMap.user_id) &
-                        (UserRoleMap.workspace_id == UserMap.workspace_id) &
-                        (UserRoleMap.is_active == True)
+                        db.UserRoleMap,
+                        (db.UserRoleMap.user_id == db.UserMap.user_id) &
+                        (db.UserRoleMap.workspace_id == db.UserMap.workspace_id) &
+                        (db.UserRoleMap.is_active == True)
                     )
-                    .filter(UserMap.user_id == user.user_id)
-                    .filter(Workspace.is_active == True)
+                    .filter(db.UserMap.user_id == user.user_id)
+                    .filter(db.Workspace.is_active == True)
                     .all()
                 )
 
@@ -249,7 +184,7 @@ def login_user(email: str, password: str):
                 workspace_ids_with_roles = set()
                 seen_workspaces = set()
 
-                for user_map, workspace, user_role_map in user_workspace_data:
+                for _, workspace, user_role_map in user_workspace_data:
                     workspace_id = workspace.workspace_id
 
                     if workspace_id not in seen_workspaces:
@@ -265,9 +200,9 @@ def login_user(email: str, password: str):
                     if user_role_map and hasattr(user_role_map, 'role_id'):
                         role_id = user_role_map.role_id
                         if role_id is not None:
-                            role_entry = session.query(Role).filter(
-                                Role.role_id == role_id,
-                                Role.is_active == True
+                            role_entry = session.query(db.Role).filter(
+                                db.Role.role_id == role_id,
+                                db.Role.is_active == True
                             ).first()
                             if role_entry and role_entry.workflow_stage:
                                 workflow_stage = role_entry.workflow_stage
@@ -288,13 +223,15 @@ def login_user(email: str, password: str):
                                 'workflow_stage': "All"
                             })
 
+                role_id = getattr(user, 'role_id', None)
                 # Prepare JWT claims
                 claims = {
                     'sub': getattr(user, 'user_id', None),
                     'user_id': getattr(user, 'user_id', None),
                     'email': getattr(user, 'email_id', None),
-                    'name': getattr(user, 'user_name', None) or getattr(user, 'name', None),
-                    'is_admin': bool(getattr(user, 'is_admin', False)),
+                    'name': getattr(user, 'user_name', None) or getattr(user, 'name', None) or getattr(user, 'first_name', None),
+                    'is_admin': True if (role_id == Role.ADMIN.id) else False,
+                    'role_id': role_id,
                     'roles': user_roles,
                 }
 
@@ -378,7 +315,7 @@ def refresh_jwt_token(refresh_token: str = None):
     if not refresh_token:
         return {'success': False, 'message': 'Refresh token not provided'}
     
-    session = Session()
+    session = db.Session()
     try:
         # Verify the refresh token
         payload = verify_refresh_token(refresh_token)
@@ -388,7 +325,7 @@ def refresh_jwt_token(refresh_token: str = None):
             return {'success': False, 'message': 'Invalid refresh token: user_id missing'}
         
         # Fetch user data to rebuild access token claims
-        user = session.query(User).filter(User.user_id == user_id, User.is_active == True).first()
+        user = session.query(db.User).filter(db.User.user_id == user_id, db.User.is_active == True).first()
         if not user:
             return {'success': False, 'message': 'User not found or inactive'}
         
@@ -397,19 +334,19 @@ def refresh_jwt_token(refresh_token: str = None):
         workspaces = []
         
         user_workspace_data = (
-            session.query(UserMap, Workspace, UserRoleMap)
-            .join(Workspace, UserMap.workspace_id == Workspace.workspace_id)
-            .outerjoin(UserRoleMap, 
-                      (UserRoleMap.user_id == UserMap.user_id) & 
-                      (UserRoleMap.workspace_id == UserMap.workspace_id) &
-                      (UserRoleMap.is_active == True))
-            .filter(UserMap.user_id == user.user_id)
-            .filter(Workspace.is_active == True)
+            session.query(db.UserMap, db.Workspace, db.UserRoleMap)
+            .join(db.Workspace, db.UserMap.workspace_id == db.Workspace.workspace_id)
+            .outerjoin(db.UserRoleMap, 
+                      (db.UserRoleMap.user_id == db.UserMap.user_id) & 
+                      (db.UserRoleMap.workspace_id == db.UserMap.workspace_id) &
+                      (db.UserRoleMap.is_active == True))
+            .filter(db.UserMap.user_id == user.user_id)
+            .filter(db.Workspace.is_active == True)
             .all()
         )
         
         seen_workspaces = set()
-        for user_map, workspace, user_role_map in user_workspace_data:
+        for _, workspace, user_role_map in user_workspace_data:
             workspace_id = workspace.workspace_id
             
             if workspace_id not in seen_workspaces:
@@ -428,13 +365,15 @@ def refresh_jwt_token(refresh_token: str = None):
                         'role_id': role_id
                     })
         
+        role_id = getattr(user, 'role_id', None)
         # Create new access token with fresh claims
         claims = {
             'sub': user.user_id,
             'user_id': user.user_id,
             'email': getattr(user, 'email_id', None),
-            'name': getattr(user, 'user_name', None) or getattr(user, 'name', None),
-            'is_admin': bool(getattr(user, 'is_admin', False)),
+            'name': getattr(user, 'user_name', None) or getattr(user, 'name', None) or getattr(user, 'first_name', None),
+            'is_admin': True if (role_id == Role.ADMIN.id) else False,
+            'role_id': role_id,
             'roles': user_roles,
         }
         
@@ -468,21 +407,21 @@ def fetch_knowledge_base(
     Returns:
         dict: List of knowledge bases with knowledge_id and knowledge_name.
     """
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         if workspace_id:
-            kb_query = session.query(KnowledgeBase).filter(
-                KnowledgeBase.industry_id == industry_id,
-                KnowledgeBase.sub_industry_id == sub_industry_id,
-                # KnowledgeBase.workspace_id == workspace_id,
-                KnowledgeBase.is_active == True
+            kb_query = session.query(db.KnowledgeBase).filter(
+                db.KnowledgeBase.industry_id == industry_id,
+                db.KnowledgeBase.sub_industry_id == sub_industry_id,
+                # db.KnowledgeBase.workspace_id == workspace_id,
+                db.KnowledgeBase.is_active == True
             )
         else:
-            kb_query = session.query(KnowledgeBase).filter(
-                KnowledgeBase.industry_id == industry_id,
-                KnowledgeBase.sub_industry_id == sub_industry_id,
-                KnowledgeBase.is_active == True
+            kb_query = session.query(db.KnowledgeBase).filter(
+                db.KnowledgeBase.industry_id == industry_id,
+                db.KnowledgeBase.sub_industry_id == sub_industry_id,
+                db.KnowledgeBase.is_active == True
             )
         kb_list = [
             {
@@ -512,7 +451,7 @@ def fetch_knowledge_base(
 #         """
 #         if user_id is None:
 #             return {"status": "error", "error": "user_id cannot be null"}
-#         session = Session()
+#         session = db.Session()
 #         try:
 #             session.rollback()
 #             # Use JWT claims directly for authentication (faster, as in login_user)
@@ -604,7 +543,7 @@ def fetch_workspaces_list(user_id):
     """
     if user_id is None:
         return {"status": "error", "error": "user_id cannot be null"}
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
 
@@ -619,8 +558,6 @@ def fetch_workspaces_list(user_id):
 
         # --- DUMMY USER HANDLING ---
         # If the user is a dummy (not in DB), return dummy workspace from .env
-        from utils.auth import _fetch_user_by_email
-        from os import getenv
         # Try to fetch user by email if available in claims
         email = claims.get("email") or claims.get("preferred_username") or claims.get("upn")
         user = None
@@ -652,53 +589,55 @@ def fetch_workspaces_list(user_id):
         # OPTIMIZED: Single query with subqueries for counts
         agent_count_subq = (
             select(
-                AgentMap.workspace_id,
-                sql_func.count(AgentMap.agent_id).label('agent_count')
+                db.AgentMap.workspace_id,
+                sql_func.count(db.AgentMap.agent_id).label('agent_count')
             )
-            .where(AgentMap.is_active == True)
-            .group_by(AgentMap.workspace_id)
+            .where(db.AgentMap.is_active == True)
+            .group_by(db.AgentMap.workspace_id)
             .subquery()
         )
         tool_count_subq = (
             select(
-                ToolMap.workspace_id,
-                sql_func.count(ToolMap.tool_id).label('tool_count')
+                db.ToolMap.workspace_id,
+                sql_func.count(db.ToolMap.tool_id).label('tool_count')
             )
-            .where(ToolMap.is_active == True)
-            .group_by(ToolMap.workspace_id)
+            .where(db.ToolMap.is_active == True)
+            .group_by(db.ToolMap.workspace_id)
             .subquery()
         )
         user_count_subq = (
             select(
-                UserMap.workspace_id,
-                sql_func.count(UserMap.user_id).label('user_count')
+                db.UserMap.workspace_id,
+                sql_func.count(db.UserMap.user_id).label('user_count')
             )
-            .where(UserMap.is_active == True)
-            .group_by(UserMap.workspace_id)
+            .where(db.UserMap.is_active == True)
+            .group_by(db.UserMap.workspace_id)
             .subquery()
         )
 
         from sqlalchemy import desc
+        from sqlalchemy import case
+
         base_query = session.query(
-            Workspace.workspace_id,
-            Workspace.workspace_name,
-            Workspace.workspace_desc,
+            db.Workspace.workspace_id,
+            db.Workspace.workspace_name,
+            db.Workspace.workspace_desc,
             sql_func.coalesce(agent_count_subq.c.agent_count, 0).label('agent_count'),
             sql_func.coalesce(tool_count_subq.c.tool_count, 0).label('tool_count'),
             sql_func.coalesce(user_count_subq.c.user_count, 0).label('user_count')
-        ).join(UserMap, UserMap.workspace_id == Workspace.workspace_id)
-        base_query = base_query.outerjoin(agent_count_subq, agent_count_subq.c.workspace_id == Workspace.workspace_id)
-        base_query = base_query.outerjoin(tool_count_subq, tool_count_subq.c.workspace_id == Workspace.workspace_id)
-        base_query = base_query.outerjoin(user_count_subq, user_count_subq.c.workspace_id == Workspace.workspace_id)
+        ).join(db.UserMap, db.UserMap.workspace_id == db.Workspace.workspace_id)
+        base_query = base_query.outerjoin(agent_count_subq, agent_count_subq.c.workspace_id == db.Workspace.workspace_id)
+        base_query = base_query.outerjoin(tool_count_subq, tool_count_subq.c.workspace_id == db.Workspace.workspace_id)
+        base_query = base_query.outerjoin(user_count_subq, user_count_subq.c.workspace_id == db.Workspace.workspace_id)
         base_query = base_query.filter(
-            UserMap.user_id == jwt_user_id,
-            UserMap.is_active == True,
-            Workspace.is_active == True
+            db.UserMap.user_id == jwt_user_id,
+            db.UserMap.is_active == True,
+            db.Workspace.is_active == True
         )
-        from sqlalchemy import case
+        
         workspaces_with_counts = base_query.order_by(
-            case((Workspace.last_updated == None, 1), else_=0),
-            desc(Workspace.last_updated)
+            case((db.Workspace.last_updated == None, 1), else_=0),
+            desc(db.Workspace.last_updated)
         ).all()
 
         results = [
@@ -716,8 +655,6 @@ def fetch_workspaces_list(user_id):
         # User exists in DB but has no active workspace — assign to dummy workspace
         # so the frontend always has something to render.
         if not results:
-            from os import getenv
-            from utils.auth import _assign_user_to_workspace
             raw_id = getenv("DUMMY_WORKSPACE_ID", "1").strip().strip('"').strip("'")
             try:
                 dummy_ws_id = int(raw_id)
@@ -769,13 +706,13 @@ def create_workspace(payload):
     if is_admin:
         has_access = True
     else:
-        session = Session()
-        admin_role = session.query(Role).filter(Role.role_name.ilike("%workspace admin%"), Role.is_active == True).first()
+        session = db.Session()
+        admin_role = session.query(db.Role).filter(db.Role.role_name.ilike("%workspace admin%"), db.Role.is_active == True).first()
         if admin_role:
-            user_role = session.query(UserRoleMap).filter(
-                UserRoleMap.user_id == jwt_user_id,
-                UserRoleMap.role_id == admin_role.role_id,
-                UserRoleMap.is_active == True
+            user_role = session.query(db.UserRoleMap).filter(
+                db.UserRoleMap.user_id == jwt_user_id,
+                db.UserRoleMap.role_id == admin_role.role_id,
+                db.UserRoleMap.is_active == True
             ).first()
             if user_role:
                 has_access = True
@@ -783,7 +720,7 @@ def create_workspace(payload):
     if not has_access:
         return {"error": "You are not authorized to create a workspace. Admin or Workspace Admin required."}
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         # Extract fields from payload
@@ -803,8 +740,8 @@ def create_workspace(payload):
 
         # Check for duplicate workspace name globally (active only)
         existing_ws = (
-            session.query(Workspace)
-            .filter(Workspace.workspace_name == workspace_name, Workspace.is_active == True)
+            session.query(db.Workspace)
+            .filter(db.Workspace.workspace_name == workspace_name, db.Workspace.is_active == True)
             .first()
         )
         if existing_ws:
@@ -812,7 +749,7 @@ def create_workspace(payload):
 
         # 1. Create Workspace
         from datetime import datetime
-        new_workspace = Workspace(
+        new_workspace = db.Workspace(
             workspace_name=workspace_name,
             namespace=namespace,
             workspace_desc=workspace_desc,
@@ -831,13 +768,13 @@ def create_workspace(payload):
         # Fetch current user from JWT claims
         creator_id = claims.get("user_id") or claims.get("sub")
         # Fetch Workspace Admin role_id
-        admin_role = session.query(Role).filter(Role.role_name.ilike("%workspace admin%"), Role.is_active == True).first()
+        admin_role = session.query(db.Role).filter(db.Role.role_name.ilike("%workspace admin%"), db.Role.is_active == True).first()
         if not admin_role:
             session.close()
             return {"error": "Workspace Admin role not found. Please configure roles."}
         admin_role_id = admin_role.role_id
         # Fetch creator's user details
-        creator = session.query(User).filter(User.user_id == creator_id).first()
+        creator = session.query(db.User).filter(db.User.user_id == creator_id).first()
         if not creator:
             session.close()
             return {"error": "Creator user not found."}
@@ -847,25 +784,25 @@ def create_workspace(payload):
         first_name = creator.first_name
         last_name = creator.last_name
         # Check if user already mapped (should not be, but safe)
-        user_map = session.query(UserMap).filter_by(user_id=creator_id, workspace_id=workspace_id).first()
+        user_map = session.query(db.UserMap).filter_by(user_id=creator_id, workspace_id=workspace_id).first()
         if not user_map:
-            session.add(UserMap(user_id=creator_id, workspace_id=workspace_id, is_active=True))
+            session.add(db.UserMap(user_id=creator_id, workspace_id=workspace_id, is_active=True))
         # Add/update user_role_mapping
-        user_role_map = session.query(UserRoleMap).filter_by(user_id=creator_id, workspace_id=workspace_id).first()
+        user_role_map = session.query(db.UserRoleMap).filter_by(user_id=creator_id, workspace_id=workspace_id).first()
         if user_role_map:
             user_role_map.role_id = admin_role_id
             user_role_map.is_active = True
         else:
-            session.add(UserRoleMap(user_id=creator_id, workspace_id=workspace_id, role_id=admin_role_id, is_active=True))
+            session.add(db.UserRoleMap(user_id=creator_id, workspace_id=workspace_id, role_id=admin_role_id, is_active=True))
         print(f"Added creator {email} as Workspace Admin to workspace {workspace_id}")
 
 
         # 2. Map region, intent, industry, subindustry, keywords, and knowledge bases (WIIM only)
         # These mappings assume the mapping tables and columns exist in DB schema
         # For each selected KB, insert a WIIM row with kb_id
-        if WorkspaceIndustrySubIndustryMap and industry and sub_industry and intent and kb_ids:
+        if db.WorkspaceIndustrySubIndustryMap and industry and sub_industry and intent and kb_ids:
             for kb_id in kb_ids:
-                session.add(WorkspaceIndustrySubIndustryMap(
+                session.add(db.WorkspaceIndustrySubIndustryMap(
                     workspace_id=workspace_id,
                     industry_id=industry,
                     subindustry_id=sub_industry,
@@ -876,11 +813,11 @@ def create_workspace(payload):
 
         # 3. Map agents/tools
         for agent_id in agent_ids:
-            session.add(AgentMap(workspace_id=workspace_id, agent_id=agent_id, is_active=True))
+            session.add(db.AgentMap(workspace_id=workspace_id, agent_id=agent_id, is_active=True))
             print(f"Mapped agent_id: {agent_id}")
 
         for tool_id in tool_ids:
-            session.add(ToolMap(workspace_id=workspace_id, tool_id=tool_id, is_active=True))
+            session.add(db.ToolMap(workspace_id=workspace_id, tool_id=tool_id, is_active=True))
             print(f"Mapped tool_id: {tool_id}")
 
         # No KBM update or creation here
@@ -901,10 +838,10 @@ def list_intent():
     Returns:
         dict: { 'response': [ { 'intent_id': ..., 'intent_name': ... }, ... ] }
     """
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
-        intents = session.query(Intent).filter(Intent.is_active == True).all()
+        intents = session.query(db.Intent).filter(db.Intent.is_active == True).all()
         result = [
             {
                 'intent_id': getattr(intent, 'intent_id', None),
@@ -931,7 +868,7 @@ def fetch_tools_info(user_id=None,intent=None):
     """
     if user_id is None:
         return {"status": "error", "error": "user_id cannot be null"}
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         # Use JWT claims for authentication (faster, as in login_user)
@@ -942,7 +879,6 @@ def fetch_tools_info(user_id=None,intent=None):
         jwt_user_id = claims.get("user_id") or claims.get("sub")
 
         # --- DUMMY USER HANDLING ---
-        from utils.auth import _fetch_user_by_email
         email = claims.get("email") or claims.get("preferred_username") or claims.get("upn")
         user = None
         if email:
@@ -953,7 +889,7 @@ def fetch_tools_info(user_id=None,intent=None):
         if not user:
             # User not yet in DB (edge case — SSO normally inserts them on first login).
             # Return ALL active tools so they can explore the full platform.
-            tools = session.query(Tool).filter(Tool.is_active == True).all()
+            tools = session.query(db.Tool).filter(db.Tool.is_active == True).all()
             tool_list = []
             for t in tools:
                 tool_dict = {col: getattr(t, col) for col in t.__table__.columns.keys()}
@@ -963,25 +899,25 @@ def fetch_tools_info(user_id=None,intent=None):
 
         # If intent is provided, filter tools by intent
         if intent:
-            intent_tool_ids = session.query(ToolIntentMap.tool_id).filter(ToolIntentMap.intent_id == intent, ToolIntentMap.is_active == True).all()
+            intent_tool_ids = session.query(db.ToolIntentMap.tool_id).filter(db.ToolIntentMap.intent_id == intent, db.ToolIntentMap.is_active == True).all()
             intent_tool_ids = [row.tool_id for row in intent_tool_ids]
-            tools = session.query(Tool).filter(
-                Tool.tool_id.in_(intent_tool_ids),
-                Tool.is_active == True
+            tools = session.query(db.Tool).filter(
+                db.Tool.tool_id.in_(intent_tool_ids),
+                db.Tool.is_active == True
             ).all()
         else:
-            tools = session.query(Tool).filter(
-                Tool.is_active == True
+            tools = session.query(db.Tool).filter(
+                db.Tool.is_active == True
             ).all()
 
         favorite_tool_ids = set()
         if jwt_user_id is not None:
             tool_ids = [t.tool_id for t in tools]
             if tool_ids:
-                favorites = session.query(FavouriteMappingTool.tool_id).filter(
-                    FavouriteMappingTool.user_id == jwt_user_id,
-                    FavouriteMappingTool.tool_id.in_(tool_ids),
-                    FavouriteMappingTool.is_active == True
+                favorites = session.query(db.FavouriteMappingTool.tool_id).filter(
+                    db.FavouriteMappingTool.user_id == jwt_user_id,
+                    db.FavouriteMappingTool.tool_id.in_(tool_ids),
+                    db.FavouriteMappingTool.is_active == True
                 ).all()
                 favorite_tool_ids = {fav.tool_id for fav in favorites}
 
@@ -1007,7 +943,7 @@ def fetch_intent_tools_info(user_id=None, intent=None):
     """
     if user_id is None:
         return {"status": "error", "error": "user_id cannot be null"}
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         # Use JWT claims for authentication (faster, as in login_user)
@@ -1019,17 +955,17 @@ def fetch_intent_tools_info(user_id=None, intent=None):
 
         # If intent is provided, filter tools by intent
         if intent:
-            intent_tool_ids = session.query(ToolIntentMap.tool_id).filter(ToolIntentMap.intent_id == intent, ToolIntentMap.is_active == True).all()
+            intent_tool_ids = session.query(db.ToolIntentMap.tool_id).filter(db.ToolIntentMap.intent_id == intent, db.ToolIntentMap.is_active == True).all()
             intent_tool_ids = [row.tool_id for row in intent_tool_ids]
             #tools = session.query(Tool).filter(Tool.tool_id.in_(intent_tool_ids)).all()
-            tools = session.query(Tool).filter(
-                Tool.tool_id.in_(intent_tool_ids),
-                Tool.is_active == True
+            tools = session.query(db.Tool).filter(
+                db.Tool.tool_id.in_(intent_tool_ids),
+                db.Tool.is_active == True
             ).all()
         else:
-            #tools = session.query(Tool).all()
-            tools = session.query(Tool).filter(
-                Tool.is_active == True
+            #tools = session.query(db.Tool).all()
+            tools = session.query(db.Tool).filter(
+                db.Tool.is_active == True
             ).all()
 
         tool_list = []
@@ -1052,7 +988,7 @@ def fetch_agents_info(user_id=None, intent=None):
     """
     if user_id is None:
         return {"status": "error", "error": "user_id cannot be null"}
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         # Use JWT claims for authentication (faster, as in login_user)
@@ -1063,7 +999,6 @@ def fetch_agents_info(user_id=None, intent=None):
         jwt_user_id = claims.get("user_id") or claims.get("sub")
 
         # --- DUMMY USER HANDLING ---
-        from utils.auth import _fetch_user_by_email
         email = claims.get("email") or claims.get("preferred_username") or claims.get("upn")
         user = None
         if email:
@@ -1073,23 +1008,22 @@ def fetch_agents_info(user_id=None, intent=None):
                 user = None
         if not user:
             # Dummy user: return all agents mapped to demo workspace
-            from os import getenv
             dummy_workspace_id = getenv("DUMMY_WORKSPACE_ID", "1")
             try:
                 dummy_workspace_id = int(dummy_workspace_id)
             except Exception:
                 dummy_workspace_id = 1
             # Get all agent_ids mapped to the demo workspace
-            mapped_agent_ids = session.query(AgentMap.agent_id).filter(
-                AgentMap.workspace_id == dummy_workspace_id,
-                AgentMap.is_active == True
+            mapped_agent_ids = session.query(db.AgentMap.agent_id).filter(
+                db.AgentMap.workspace_id == dummy_workspace_id,
+                db.AgentMap.is_active == True
             ).all()
             mapped_agent_ids = [row.agent_id for row in mapped_agent_ids]
             if not mapped_agent_ids:
                 return {'response': []}
-            agents = session.query(Agent).filter(
-                Agent.agent_id.in_(mapped_agent_ids),
-                Agent.is_active == True
+            agents = session.query(db.Agent).filter(
+                db.Agent.agent_id.in_(mapped_agent_ids),
+                db.Agent.is_active == True
             ).all()
             agent_list = []
             for a in agents:
@@ -1100,25 +1034,25 @@ def fetch_agents_info(user_id=None, intent=None):
 
         # If intent is provided, filter agents by intent
         if intent:
-            intent_agent_ids = session.query(AgentIntentMap.agent_id).filter(AgentIntentMap.intent_id == intent, AgentIntentMap.is_active == True).all()
+            intent_agent_ids = session.query(db.AgentIntentMap.agent_id).filter(db.AgentIntentMap.intent_id == intent, db.AgentIntentMap.is_active == True).all()
             intent_agent_ids = [row.agent_id for row in intent_agent_ids]
-            agents = session.query(Agent).filter(
-                Agent.agent_id.in_(intent_agent_ids),
-                Agent.is_active == True
+            agents = session.query(db.Agent).filter(
+                db.Agent.agent_id.in_(intent_agent_ids),
+                db.Agent.is_active == True
             ).all()
         else:
-            agents = session.query(Agent).filter(
-                Agent.is_active == True
+            agents = session.query(db.Agent).filter(
+                db.Agent.is_active == True
             ).all()
 
         favorite_agent_ids = set()
         if jwt_user_id is not None:
             agent_ids = [a.agent_id for a in agents]
             if agent_ids:
-                favorites = session.query(FavouriteMappingAgent.agent_id).filter(
-                    FavouriteMappingAgent.user_id == jwt_user_id,
-                    FavouriteMappingAgent.agent_id.in_(agent_ids),
-                    FavouriteMappingAgent.is_active == True
+                favorites = session.query(db.FavouriteMappingAgent.agent_id).filter(
+                    db.FavouriteMappingAgent.user_id == jwt_user_id,
+                    db.FavouriteMappingAgent.agent_id.in_(agent_ids),
+                    db.FavouriteMappingAgent.is_active == True
                 ).all()
                 favorite_agent_ids = {fav.agent_id for fav in favorites}
 
@@ -1144,7 +1078,7 @@ def fetch_intent_agents_info(user_id=None, intent=None):
     """
     if user_id is None:
         return {"status": "error", "error": "user_id cannot be null"}
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         # Use JWT claims for authentication (faster, as in login_user)
@@ -1154,17 +1088,17 @@ def fetch_intent_agents_info(user_id=None, intent=None):
 
         # If intent is provided, filter agents by intent
         if intent:
-            intent_agent_ids = session.query(AgentIntentMap.agent_id).filter(AgentIntentMap.intent_id == intent, AgentIntentMap.is_active == True).all()
+            intent_agent_ids = session.query(db.AgentIntentMap.agent_id).filter(db.AgentIntentMap.intent_id == intent, db.AgentIntentMap.is_active == True).all()
             intent_agent_ids = [row.agent_id for row in intent_agent_ids]
             #agents = session.query(Agent).filter(Agent.agent_id.in_(intent_agent_ids)).all()
-            agents = session.query(Agent).filter(
-                Agent.agent_id.in_(intent_agent_ids),
-                Agent.is_active == True
+            agents = session.query(db.Agent).filter(
+                db.Agent.agent_id.in_(intent_agent_ids),
+                db.Agent.is_active == True
             ).all()
         else:
-            #agents = session.query(Agent).all()
-            agents = session.query(Agent).filter(
-                Agent.is_active == True
+            #agents = session.query(db.Agent).all()
+            agents = session.query(db.Agent).filter(
+                db.Agent.is_active == True
             ).all()
 
         agent_list = []
@@ -1196,7 +1130,7 @@ def update_workspace(payload):
     is_admin = claims.get("is_admin", False)
     jwt_user_id = claims.get("user_id") or claims.get("sub")
     has_access = False
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         workspace_id = payload.get('workspace_id')
@@ -1204,13 +1138,13 @@ def update_workspace(payload):
             has_access = True
         else:
             # Check if user has Workspace Admin role for this workspace
-            admin_role = session.query(Role).filter(Role.role_name.ilike("%workspace admin%"), Role.is_active == True).first()
+            admin_role = session.query(db.Role).filter(db.Role.role_name.ilike("%workspace admin%"), db.Role.is_active == True).first()
             if admin_role:
-                user_role = session.query(UserRoleMap).filter(
-                    UserRoleMap.user_id == jwt_user_id,
-                    UserRoleMap.workspace_id == workspace_id,
-                    UserRoleMap.role_id == admin_role.role_id,
-                    UserRoleMap.is_active == True
+                user_role = session.query(db.UserRoleMap).filter(
+                    db.UserRoleMap.user_id == jwt_user_id,
+                    db.UserRoleMap.workspace_id == workspace_id,
+                    db.UserRoleMap.role_id == admin_role.role_id,
+                    db.UserRoleMap.is_active == True
                 ).first()
                 if user_role:
                     has_access = True
@@ -1230,15 +1164,15 @@ def update_workspace(payload):
         kb_title = payload.get('kb_title', [])
         kb_description = payload.get('kb_description', [])
 
-        ws = session.query(Workspace).filter(Workspace.workspace_id==workspace_id, Workspace.is_active==True).first()
+        ws = session.query(db.Workspace).filter(db.Workspace.workspace_id==workspace_id, db.Workspace.is_active==True).first()
         if not ws:
             return {"error": "Workspace not found or inactive"}
         if name and ws.workspace_name != name:
             existing_ws = (
-                session.query(Workspace)
+                session.query(db.Workspace)
                 .filter(
-                    Workspace.workspace_name == name,
-                    Workspace.is_active == True,
+                    db.Workspace.workspace_name == name,
+                    db.Workspace.is_active == True,
                 )
                 .first()
             )
@@ -1253,17 +1187,17 @@ def update_workspace(payload):
         if keywords:
             ws.keywords = ','.join(keywords)
         # Update WIIM mappings for KBs: remove all old, insert new for each selected KB
-        if WorkspaceIndustrySubIndustryMap and industry and sub_industry and intent and kb_ids is not None:
+        if db.WorkspaceIndustrySubIndustryMap and industry and sub_industry and intent and kb_ids is not None:
             # Remove all existing WIIM rows for this workspace/industry/intent/subindustry
-            session.query(WorkspaceIndustrySubIndustryMap).filter(
-                WorkspaceIndustrySubIndustryMap.workspace_id==workspace_id,
-                WorkspaceIndustrySubIndustryMap.industry_id==industry,
-                WorkspaceIndustrySubIndustryMap.subindustry_id==sub_industry,
-                WorkspaceIndustrySubIndustryMap.intent_id==intent
+            session.query(db.WorkspaceIndustrySubIndustryMap).filter(
+                db.WorkspaceIndustrySubIndustryMap.workspace_id==workspace_id,
+                db.WorkspaceIndustrySubIndustryMap.industry_id==industry,
+                db.WorkspaceIndustrySubIndustryMap.subindustry_id==sub_industry,
+                db.WorkspaceIndustrySubIndustryMap.intent_id==intent
             ).delete(synchronize_session=False)
             # Insert new WIIM rows for each selected KB
             for kb_id in kb_ids:
-                session.add(WorkspaceIndustrySubIndustryMap(
+                session.add(db.WorkspaceIndustrySubIndustryMap(
                     workspace_id=workspace_id,
                     industry_id=industry,
                     subindustry_id=sub_industry,
@@ -1277,23 +1211,23 @@ def update_workspace(payload):
             ws.last_updated = datetime.utcnow()
         if tool_ids is not None:
             # Mark all existing mappings as inactive
-            session.query(ToolMap).filter(ToolMap.workspace_id==workspace_id).update({ToolMap.is_active: False})
+            session.query(db.ToolMap).filter(db.ToolMap.workspace_id==workspace_id).update({db.ToolMap.is_active: False})
             for tid in tool_ids:
-                tool_map = session.query(ToolMap).filter(ToolMap.workspace_id==workspace_id, ToolMap.tool_id==tid).first()
+                tool_map = session.query(db.ToolMap).filter(db.ToolMap.workspace_id==workspace_id, db.ToolMap.tool_id==tid).first()
                 if tool_map:
                     tool_map.is_active = True
                 else:
-                    session.add(ToolMap(workspace_id=workspace_id, tool_id=tid, is_active=True))
+                    session.add(db.ToolMap(workspace_id=workspace_id, tool_id=tid, is_active=True))
         # Update or insert agents
         if agent_ids is not None:
             # Mark all existing mappings as inactive
-            session.query(AgentMap).filter(AgentMap.workspace_id==workspace_id).update({AgentMap.is_active: False})
+            session.query(db.AgentMap).filter(db.AgentMap.workspace_id==workspace_id).update({db.AgentMap.is_active: False})
             for aid in agent_ids:
-                agent_map = session.query(AgentMap).filter(AgentMap.workspace_id==workspace_id, AgentMap.agent_id==aid).first()
+                agent_map = session.query(db.AgentMap).filter(db.AgentMap.workspace_id==workspace_id, db.AgentMap.agent_id==aid).first()
                 if agent_map:
                     agent_map.is_active = True
                 else:
-                    session.add(AgentMap(workspace_id=workspace_id, agent_id=aid, is_active=True))
+                    session.add(db.AgentMap(workspace_id=workspace_id, agent_id=aid, is_active=True))
         # No KBM update or creation here
         session.commit()
         return {"response": "Workspace updated"}
@@ -1320,14 +1254,14 @@ def delete_workspace(workspace_id):
     if is_admin:
         has_access = True
     else:
-        session = Session()
-        admin_role = session.query(Role).filter(Role.role_name.ilike("%workspace admin%"), Role.is_active == True).first()
+        session = db.Session()
+        admin_role = session.query(db.Role).filter(db.Role.role_name.ilike("%workspace admin%"), db.Role.is_active == True).first()
         if admin_role:
-            user_role = session.query(UserRoleMap).filter(
-                UserRoleMap.user_id == jwt_user_id,
-                UserRoleMap.workspace_id == workspace_id,
-                UserRoleMap.role_id == admin_role.role_id,
-                UserRoleMap.is_active == True
+            user_role = session.query(db.UserRoleMap).filter(
+                db.UserRoleMap.user_id == jwt_user_id,
+                db.UserRoleMap.workspace_id == workspace_id,
+                db.UserRoleMap.role_id == admin_role.role_id,
+                db.UserRoleMap.is_active == True
             ).first()
             if user_role:
                 has_access = True
@@ -1335,10 +1269,10 @@ def delete_workspace(workspace_id):
     if not has_access:
         return {"error": "You are not authorized to delete a workspace. Admin or Workspace Admin required."}
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
-        ws = session.query(Workspace).filter(Workspace.workspace_id==workspace_id, Workspace.is_active==True).first()
+        ws = session.query(db.Workspace).filter(db.Workspace.workspace_id==workspace_id, db.Workspace.is_active==True).first()
         if not ws:
             return {"error": "Workspace not found or already inactive"}
         ws.is_active = False
@@ -1360,7 +1294,7 @@ def fetch_workspace_details(workspace_id):
     Returns:
         dict: Workspace info, mappings, tools, agents, users, and related attributes.
     '''
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         # Use JWT claims directly for authentication (faster, as in login_user)
@@ -1373,8 +1307,6 @@ def fetch_workspace_details(workspace_id):
             return {"error": "Unauthorized: user_id not found in token claims"}
 
         # --- DUMMY USER HANDLING ---
-        from utils.auth import _fetch_user_by_email
-        from os import getenv
         email = claims.get("email") or claims.get("preferred_username") or claims.get("upn")
         user = None
         if email:
@@ -1395,10 +1327,10 @@ def fetch_workspace_details(workspace_id):
             # else: skip user_map check and proceed
         else:
             # Check if user is mapped to this workspace
-            user_map = session.query(UserMap).filter_by(workspace_id=workspace_id, user_id=jwt_user_id, is_active=True).first()
+            user_map = session.query(db.UserMap).filter_by(workspace_id=workspace_id, user_id=jwt_user_id, is_active=True).first()
             if not user_map:
                 return {"error": "You are not authorized to access this workspace."}
-        ws = session.query(Workspace).filter(Workspace.workspace_id==workspace_id, Workspace.is_active==True).first()
+        ws = session.query(db.Workspace).filter(db.Workspace.workspace_id==workspace_id, db.Workspace.is_active==True).first()
         if not ws:
             # Workspace row missing or inactive — if this is the dummy workspace,
             # build a synthetic response with ALL active tools and agents so that
@@ -1413,14 +1345,14 @@ def fetch_workspace_details(workspace_id):
                     'is_active': True
                 }
                 # Category mapping (needed for enriching tool/agent dicts)
-                categories = session.query(Category).filter(Category.is_active == True).all()
+                categories = session.query(db.Category).filter(db.Category.is_active == True).all()
                 cat_map = {str(c.category_id): c.category_name for c in categories}
 
                 # Return ALL active tools (not just workspace-mapped — workspace 73 may have none)
                 tools = []
-                tool_query = session.query(Tool)
-                if hasattr(Tool, 'is_active'):
-                    tool_query = tool_query.filter(Tool.is_active == True)
+                tool_query = session.query(db.Tool)
+                if hasattr(db.Tool, 'is_active'):
+                    tool_query = tool_query.filter(db.Tool.is_active == True)
                 for t in tool_query.all():
                     tool_dict = {col: getattr(t, col) for col in t.__table__.columns.keys()}
                     tool_dict['last_updated'] = None
@@ -1431,9 +1363,9 @@ def fetch_workspace_details(workspace_id):
 
                 # Return ALL active agents
                 agents = []
-                agent_query = session.query(Agent)
-                if hasattr(Agent, 'is_active'):
-                    agent_query = agent_query.filter(Agent.is_active == True)
+                agent_query = session.query(db.Agent)
+                if hasattr(db.Agent, 'is_active'):
+                    agent_query = agent_query.filter(db.Agent.is_active == True)
                 for a in agent_query.all():
                     agent_dict = {col: getattr(a, col) for col in a.__table__.columns.keys()}
                     agent_dict['last_updated'] = None
@@ -1462,7 +1394,7 @@ def fetch_workspace_details(workspace_id):
         ws_info = {col: getattr(ws, col) for col in ws.__table__.columns.keys()}
 
         # Category mapping
-        categories = session.query(Category).filter(Category.is_active == True).all()
+        categories = session.query(db.Category).filter(db.Category.is_active == True).all()
         cat_map = {str(c.category_id): c.category_name for c in categories}
 
         # Mappings (region, intent, industry, subindustry, keywords) - only is_active if present
@@ -1473,30 +1405,30 @@ def fetch_workspace_details(workspace_id):
             return q
 
         # Fetch industry/subindustry mapping and names
-        ws_ind_map = session.query(WorkspaceIndustrySubIndustryMap).filter(WorkspaceIndustrySubIndustryMap.workspace_id==workspace_id, WorkspaceIndustrySubIndustryMap.is_active==True).first()
+        ws_ind_map = session.query(db.WorkspaceIndustrySubIndustryMap).filter(db.WorkspaceIndustrySubIndustryMap.workspace_id==workspace_id, db.WorkspaceIndustrySubIndustryMap.is_active==True).first()
         industry_id = subindustry_id = intent_id = industry_name = subindustry_name = None
         if ws_ind_map:
             industry_id = getattr(ws_ind_map, 'industry_id', None)
             subindustry_id = getattr(ws_ind_map, 'subindustry_id', None)
             intent_id = getattr(ws_ind_map, 'intent_id', None)
             if industry_id:
-                industry_obj = session.query(Industry).filter(Industry.industry_id==industry_id,Industry.is_active==True).first()
+                industry_obj = session.query(db.Industry).filter(db.Industry.industry_id==industry_id,db.Industry.is_active==True).first()
                 if industry_obj:
                     industry_name = getattr(industry_obj, 'industry_name', None)
             if subindustry_id:
-                subindustry_obj = session.query(SubIndustry).filter(SubIndustry.subindustry_id==subindustry_id,SubIndustry.is_active==True).first()
+                subindustry_obj = session.query(db.SubIndustry).filter(db.SubIndustry.subindustry_id==subindustry_id,db.SubIndustry.is_active==True).first()
                 if subindustry_obj:
                     subindustry_name = getattr(subindustry_obj, 'subindustry_name', None)
 
         # Tools in workspace (only active)
-        tool_maps = session.query(ToolMap).filter(ToolMap.workspace_id==workspace_id, ToolMap.is_active==True).all()
+        tool_maps = session.query(db.ToolMap).filter(db.ToolMap.workspace_id==workspace_id, db.ToolMap.is_active==True).all()
         tool_map_dict = {tm.tool_id: tm for tm in tool_maps}
         tool_ids = list(tool_map_dict.keys())
         tools = []
         if tool_ids:
-            tool_query = session.query(Tool).filter(Tool.tool_id.in_(tool_ids))
-            if hasattr(Tool, 'is_active'):
-                tool_query = tool_query.filter(Tool.is_active == True)
+            tool_query = session.query(db.Tool).filter(db.Tool.tool_id.in_(tool_ids))
+            if hasattr(db.Tool, 'is_active'):
+                tool_query = tool_query.filter(db.Tool.is_active == True)
             for t in tool_query.all():
                 tool_dict = {col: getattr(t, col) for col in t.__table__.columns.keys()}
                 # Add last_updated from ToolMap
@@ -1510,14 +1442,14 @@ def fetch_workspace_details(workspace_id):
                 tools.append(tool_dict)
 
         # Agents in workspace (only active)
-        agent_maps = session.query(AgentMap).filter(AgentMap.workspace_id==workspace_id, AgentMap.is_active==True).all()
+        agent_maps = session.query(db.AgentMap).filter(db.AgentMap.workspace_id==workspace_id, db.AgentMap.is_active==True).all()
         agent_map_dict = {am.agent_id: am for am in agent_maps}
         agent_ids = list(agent_map_dict.keys())
         agents = []
         if agent_ids:
-            agent_query = session.query(Agent).filter(Agent.agent_id.in_(agent_ids))
-            if hasattr(Agent, 'is_active'):
-                agent_query = agent_query.filter(Agent.is_active == True)
+            agent_query = session.query(db.Agent).filter(db.Agent.agent_id.in_(agent_ids))
+            if hasattr(db.Agent, 'is_active'):
+                agent_query = agent_query.filter(db.Agent.is_active == True)
             for a in agent_query.all():
                 agent_dict = {col: getattr(a, col) for col in a.__table__.columns.keys()}
                 # Add last_updated from AgentMap
@@ -1535,14 +1467,14 @@ def fetch_workspace_details(workspace_id):
         # OPTIMIZED: Single JOIN query instead of N queries
         users = []
         user_data_query = (
-            session.query(User, UserRoleMap, Role, UserMap)
-            .join(UserMap, UserMap.user_id == User.user_id)
-            .outerjoin(UserRoleMap, (UserRoleMap.user_id == User.user_id) & (UserRoleMap.workspace_id == workspace_id) & (UserRoleMap.is_active == True))
-            .outerjoin(Role, (UserRoleMap.role_id == Role.role_id) & (Role.is_active == True))
-            .filter(UserMap.workspace_id == workspace_id, UserMap.is_active == True)
+            session.query(db.User, db.UserRoleMap, db.Role, db.UserMap)
+            .join(db.UserMap, db.UserMap.user_id == db.User.user_id)
+            .outerjoin(db.UserRoleMap, (db.UserRoleMap.user_id == db.User.user_id) & (db.UserRoleMap.workspace_id == workspace_id) & (db.UserRoleMap.is_active == True))
+            .outerjoin(db.Role, (db.UserRoleMap.role_id == db.Role.role_id) & (db.Role.is_active == True))
+            .filter(db.UserMap.workspace_id == workspace_id, db.UserMap.is_active == True)
         )
-        if hasattr(User, 'is_active'):
-            user_data_query = user_data_query.filter(User.is_active == True)
+        if hasattr(db.User, 'is_active'):
+            user_data_query = user_data_query.filter(db.User.is_active == True)
 
         for user, user_role_map, role, user_map in user_data_query.all():
             user_dict = {col: getattr(user, col) for col in user.__table__.columns.keys()}
@@ -1556,17 +1488,17 @@ def fetch_workspace_details(workspace_id):
         knowledge_bases = []
         if industry_name and subindustry_name:
             # Get industry_id and subindustry_id
-            industry_obj = session.query(Industry).filter(func.lower(Industry.industry_name) == industry_name.strip().lower(), Industry.is_active == True).first()
-            subindustry_obj = session.query(SubIndustry).filter(func.lower(SubIndustry.subindustry_name) == subindustry_name.strip().lower(), SubIndustry.is_active == True).first()
+            industry_obj = session.query(db.Industry).filter(func.lower(db.Industry.industry_name) == industry_name.strip().lower(), db.Industry.is_active == True).first()
+            subindustry_obj = session.query(db.SubIndustry).filter(func.lower(db.SubIndustry.subindustry_name) == subindustry_name.strip().lower(), db.SubIndustry.is_active == True).first()
             if industry_obj and subindustry_obj:
-                kb_query = session.query(WorkspaceIndustrySubIndustryMap).filter(
-                    WorkspaceIndustrySubIndustryMap.industry_id == industry_obj.industry_id,
-                    WorkspaceIndustrySubIndustryMap.subindustry_id == subindustry_obj.subindustry_id,
-                    WorkspaceIndustrySubIndustryMap.workspace_id == workspace_id,
-                    WorkspaceIndustrySubIndustryMap.is_active == True
+                kb_query = session.query(db.WorkspaceIndustrySubIndustryMap).filter(
+                    db.WorkspaceIndustrySubIndustryMap.industry_id == industry_obj.industry_id,
+                    db.WorkspaceIndustrySubIndustryMap.subindustry_id == subindustry_obj.subindustry_id,
+                    db.WorkspaceIndustrySubIndustryMap.workspace_id == workspace_id,
+                    db.WorkspaceIndustrySubIndustryMap.is_active == True
                 )
                 for kb_id in [row.kb_id for row in kb_query.all() if row.kb_id]:
-                    kb_obj = session.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id, KnowledgeBase.is_active == True).first()
+                    kb_obj = session.query(db.KnowledgeBase).filter(db.KnowledgeBase.id == kb_id, db.KnowledgeBase.is_active == True).first()
                     if kb_obj:
                         knowledge_bases.append({
                             'id': getattr(kb_obj, 'id', None),
@@ -1588,9 +1520,9 @@ def fetch_workspace_details(workspace_id):
         # return ALL active tools and agents so new users can explore the platform.
         if int(workspace_id) == int(dummy_workspace_id):
             if not tools:
-                tool_query = session.query(Tool)
-                if hasattr(Tool, 'is_active'):
-                    tool_query = tool_query.filter(Tool.is_active == True)
+                tool_query = session.query(db.Tool)
+                if hasattr(db.Tool, 'is_active'):
+                    tool_query = tool_query.filter(db.Tool.is_active == True)
                 for t in tool_query.all():
                     tool_dict = {col: getattr(t, col) for col in t.__table__.columns.keys()}
                     tool_dict['last_updated'] = None
@@ -1600,9 +1532,9 @@ def fetch_workspace_details(workspace_id):
                     tools.append(tool_dict)
 
             if not agents:
-                agent_query = session.query(Agent)
-                if hasattr(Agent, 'is_active'):
-                    agent_query = agent_query.filter(Agent.is_active == True)
+                agent_query = session.query(db.Agent)
+                if hasattr(db.Agent, 'is_active'):
+                    agent_query = agent_query.filter(db.Agent.is_active == True)
                 for a in agent_query.all():
                     agent_dict = {col: getattr(a, col) for col in a.__table__.columns.keys()}
                     agent_dict['last_updated'] = None
@@ -1647,30 +1579,30 @@ def fetch_agents_tools_by_ids(workspace_id):
     Only returns mappings and entities where is_active == 'true'.
     Replaces agent_category/tool_category IDs with category names.
     """
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
 
         # Check if user is mapped to this workspace
-        user_map = session.query(UserMap).filter_by(
+        user_map = session.query(db.UserMap).filter_by(
             workspace_id=workspace_id, user_id=jwt_user_id, is_active=True
         ).first()
         if not user_map:
             return {"error": "You are not authorized to access this workspace."}
 
         # 1. Get category_id -> category_name mapping
-        categories = session.query(Category).filter(Category.is_active != False).all()
+        categories = session.query(db.Category).filter(db.Category.is_active != False).all()
         cat_map = {str(c.category_id): c.category_name for c in categories}
 
         results = []
 
         # 2. Fetch tools
-        tool_maps_q = session.query(ToolMap).filter_by(workspace_id=workspace_id, is_active=True)
+        tool_maps_q = session.query(db.ToolMap).filter_by(workspace_id=workspace_id, is_active=True)
         tool_ids = [tm.tool_id for tm in tool_maps_q.all()]
         if tool_ids:
-            tool_query = session.query(Tool).filter(Tool.tool_id.in_(tool_ids))
-            if hasattr(Tool, 'is_active'):
-                tool_query = tool_query.filter(Tool.is_active != 'false')
+            tool_query = session.query(db.Tool).filter(db.Tool.tool_id.in_(tool_ids))
+            if hasattr(db.Tool, 'is_active'):
+                tool_query = tool_query.filter(db.Tool.is_active != 'false')
             for t in tool_query.all():
                 tool_dict = {col: getattr(t, col) for col in t.__table__.columns.keys()}
                 # Replace tool_category IDs with names
@@ -1680,12 +1612,12 @@ def fetch_agents_tools_by_ids(workspace_id):
                 results.append(tool_dict)
 
         # 3. Fetch agents
-        agent_maps_q = session.query(AgentMap).filter_by(workspace_id=workspace_id, is_active=True)
+        agent_maps_q = session.query(db.AgentMap).filter_by(workspace_id=workspace_id, is_active=True)
         agent_ids = [am.agent_id for am in agent_maps_q.all()]
         if agent_ids:
-            agent_query = session.query(Agent).filter(Agent.agent_id.in_(agent_ids))
-            if hasattr(Agent, 'is_active'):
-                agent_query = agent_query.filter(Agent.is_active != 'false')
+            agent_query = session.query(db.Agent).filter(db.Agent.agent_id.in_(agent_ids))
+            if hasattr(db.Agent, 'is_active'):
+                agent_query = agent_query.filter(db.Agent.is_active != 'false')
             for a in agent_query.all():
                 agent_dict = {col: getattr(a, col) for col in a.__table__.columns.keys()}
                 # Replace agent_category IDs with names
@@ -1719,7 +1651,7 @@ def add_agent_tool_to_workspace(payload):
     if not jwt_user_id:
         return {"error": "Unauthorized: user_id not found in token claims"}
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
 
@@ -1728,30 +1660,30 @@ def add_agent_tool_to_workspace(payload):
         entity_id = payload.get("id")
 
         # Authorization: JWT user must be mapped to this workspace
-        user_map = session.query(UserMap).filter_by(
+        user_map = session.query(db.UserMap).filter_by(
             workspace_id=workspace_id, user_id=jwt_user_id, is_active=True
         ).first()
         if not user_map:
             return {"error": "You are not authorized to modify this workspace."}
 
         if entity_type == "Agent":
-            existing = session.query(AgentMap).filter_by(workspace_id=workspace_id, agent_id=entity_id).first()
+            existing = session.query(db.AgentMap).filter_by(workspace_id=workspace_id, agent_id=entity_id).first()
             if existing:
                 if not existing.is_active:
                     existing.is_active = True
                 else:
                     return {"response": "Agent already mapped and active in workspace"}
             else:
-                session.add(AgentMap(workspace_id=workspace_id, agent_id=entity_id, is_active=True))
+                session.add(db.AgentMap(workspace_id=workspace_id, agent_id=entity_id, is_active=True))
         elif entity_type == "Tool":
-            existing = session.query(ToolMap).filter_by(workspace_id=workspace_id, tool_id=entity_id).first()
+            existing = session.query(db.ToolMap).filter_by(workspace_id=workspace_id, tool_id=entity_id).first()
             if existing:
                 if not existing.is_active:
                     existing.is_active = True
                 else:
                     return {"response": "Tool already mapped and active in workspace"}
             else:
-                session.add(ToolMap(workspace_id=workspace_id, tool_id=entity_id, is_active=True))
+                session.add(db.ToolMap(workspace_id=workspace_id, tool_id=entity_id, is_active=True))
         else:
             return {"error": "Invalid type. Must be 'Agent' or 'Tool'."}
 
@@ -1784,11 +1716,11 @@ def remove_workspace_agent_tool_mapping(workspace_id, agent_id=None, tool_id=Non
     if not jwt_user_id:
         return {"error": "Unauthorized: user_id not found in token claims"}
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         # Check if user is mapped to this workspace
-        user_map = session.query(UserMap).filter_by(
+        user_map = session.query(db.UserMap).filter_by(
             workspace_id=workspace_id, user_id=jwt_user_id, is_active=True
         ).first()
         if not user_map:
@@ -1796,12 +1728,12 @@ def remove_workspace_agent_tool_mapping(workspace_id, agent_id=None, tool_id=Non
 
         updated = False
         if agent_id is not None:
-            mapping = session.query(AgentMap).filter_by(workspace_id=workspace_id, agent_id=agent_id).first()
+            mapping = session.query(db.AgentMap).filter_by(workspace_id=workspace_id, agent_id=agent_id).first()
             if mapping and hasattr(mapping, 'is_active'):
                 mapping.is_active = False
                 updated = True
         if tool_id is not None:
-            mapping = session.query(ToolMap).filter_by(workspace_id=workspace_id, tool_id=tool_id).first()
+            mapping = session.query(db.ToolMap).filter_by(workspace_id=workspace_id, tool_id=tool_id).first()
             if mapping and hasattr(mapping, 'is_active'):
                 mapping.is_active = False
                 updated = True
@@ -1837,16 +1769,16 @@ async def update_fav_agent(user_id, agent_id, workspace_id=0) -> dict:
     if not valid:
         return {"status": "error", "error": err}
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
-        user_agent_fav = session.query(FavouriteMappingAgent).filter(
-            FavouriteMappingAgent.user_id == user_id,
-            FavouriteMappingAgent.agent_id == agent_id,
-            FavouriteMappingAgent.workspace_id == workspace_id
+        user_agent_fav = session.query(db.FavouriteMappingAgent).filter(
+            db.FavouriteMappingAgent.user_id == user_id,
+            db.FavouriteMappingAgent.agent_id == agent_id,
+            db.FavouriteMappingAgent.workspace_id == workspace_id
         ).first()
         if not user_agent_fav:
-            new_fav = FavouriteMappingAgent(
+            new_fav = db.FavouriteMappingAgent(
                 user_id=user_id,
                 agent_id=agent_id,
                 workspace_id=workspace_id,
@@ -1892,16 +1824,16 @@ async def update_fav_tool(user_id, tool_id, workspace_id=0) -> dict:
     if not valid:
         return {"status": "error", "error": err}
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
-        user_tool_fav = session.query(FavouriteMappingTool).filter(
-            FavouriteMappingTool.user_id == user_id,
-            FavouriteMappingTool.tool_id == tool_id,
-            FavouriteMappingTool.workspace_id == workspace_id
+        user_tool_fav = session.query(db.FavouriteMappingTool).filter(
+            db.FavouriteMappingTool.user_id == user_id,
+            db.FavouriteMappingTool.tool_id == tool_id,
+            db.FavouriteMappingTool.workspace_id == workspace_id
         ).first()
         if not user_tool_fav:
-            new_fav = FavouriteMappingTool(
+            new_fav = db.FavouriteMappingTool(
                 user_id=user_id,
                 tool_id=tool_id,
                 workspace_id=workspace_id,
@@ -1948,7 +1880,7 @@ async def update_fav_tool(user_id, tool_id, workspace_id=0) -> dict:
 #     if not jwt_user_id:
 #         return {"error": "Unauthorized: user_id not found in token claims"}
 
-#     session = Session()
+#     session = db.Session()
 #     try:
 #         session.rollback()
 #         results = []
@@ -1957,26 +1889,26 @@ async def update_fav_tool(user_id, tool_id, workspace_id=0) -> dict:
 #             # Join AgentsCMS, AgentCMSIntegrationMap, Integrations
 #             query = (
 #                 session.query(
-#                     Integrations.integration_name,
-#                     Integrations.integration_logo_url,
-#                     Integrations.is_active
+#                     db.Integrations.integration_name,
+#                     db.Integrations.integration_logo_url,
+#                     db.Integrations.is_active
 #                 )
-#                 .join(AgentCMSIntegrationMap, AgentCMSIntegrationMap.integration_id == Integrations.integration_id)
+#                 .join(AgentCMSIntegrationMap, AgentCMSIntegrationMap.integration_id == db.Integrations.integration_id)
 #                 .join(AgentsCMS, AgentsCMS.agent_cms_id == AgentCMSIntegrationMap.agent_cms_id)
 #                 .filter(AgentsCMS.agent_id == id)
 #             )
 #         elif str(type).lower() == 'tool':
 #             print("Fetching integrations for tool_id:", id)
-#             # Join ToolsCMS, ToolCMSIntegrationMap, Integrations
+#             # Join db.ToolsCMS, ToolCMSIntegrationMap, Integrations
 #             query = (
 #                 session.query(
-#                     Integrations.integration_name,
-#                     Integrations.integration_logo_url,
-#                     Integrations.is_active
+#                     db.Integrations.integration_name,
+#                     db.Integrations.integration_logo_url,
+#                     db.Integrations.is_active
 #                 )
-#                 .join(ToolCMSIntegrationMap, ToolCMSIntegrationMap.integration_id == Integrations.integration_id)
-#                 .join(ToolsCMS, ToolsCMS.tool_cms_id == ToolCMSIntegrationMap.tool_cms_id)
-#                 .filter(ToolsCMS.tool_id == id)
+#                 .join(db.ToolCMSIntegrationMap, ToolCMSIntegrationMap.integration_id == db.Integrations.integration_id)
+#                 .join(db.ToolsCMS, db.ToolsCMS.tool_cms_id == ToolCMSIntegrationMap.tool_cms_id)
+#                 .filter(db.ToolsCMS.tool_id == id)
 #             )
 #         else:
 #             return {'error': "Invalid type. Must be 'agent' or 'tool'."}
@@ -2062,7 +1994,7 @@ def list_integrations_for_entity_prev(id, type):
         print(f"[list_integrations_for_entity] Invalid type '{type}'. Returning fixed catalog.")
         return as_catalog_response(FIXED_CATALOG)
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
 
@@ -2071,27 +2003,27 @@ def list_integrations_for_entity_prev(id, type):
             print("Fetching integrations for agent_id:", id)
             query = (
                 session.query(
-                    Integrations.integration_id,        # id
-                    Integrations.integration_name,      # name + maps for desc/logo
-                    Integrations.integration_logo_url,  # logo
-                    Integrations.is_active              # connected
+                    db.Integrations.integration_id,        # id
+                    db.Integrations.integration_name,      # name + maps for desc/logo
+                    db.Integrations.integration_logo_url,  # logo
+                    db.Integrations.is_active              # connected
                 )
-                .join(AgentCMSIntegrationMap, AgentCMSIntegrationMap.integration_id == Integrations.integration_id)
-                .join(AgentsCMS, AgentsCMS.agent_cms_id == AgentCMSIntegrationMap.agent_cms_id)
-                .filter(AgentsCMS.agent_id == id)
+                .join(db.AgentCMSIntegrationMap, db.AgentCMSIntegrationMap.integration_id == db.Integrations.integration_id)
+                .join(db.AgentsCMS, db.AgentsCMS.agent_cms_id == db.AgentCMSIntegrationMap.agent_cms_id)
+                .filter(db.AgentsCMS.agent_id == id)
             )
         else:  # type_norm == "tool"
             print("Fetching integrations for tool_id:", id)
             query = (
                 session.query(
-                    Integrations.integration_id,
-                    Integrations.integration_name,
-                    Integrations.integration_logo_url,
-                    Integrations.is_active
+                    db.Integrations.integration_id,
+                    db.Integrations.integration_name,
+                    db.Integrations.integration_logo_url,
+                    db.Integrations.is_active
                 )
-                .join(ToolCMSIntegrationMap, ToolCMSIntegrationMap.integration_id == Integrations.integration_id)
-                .join(ToolsCMS, ToolsCMS.tool_cms_id == ToolCMSIntegrationMap.tool_cms_id)
-                .filter(ToolsCMS.tool_id == id)
+                .join(db.ToolCMSIntegrationMap, db.ToolCMSIntegrationMap.integration_id == db.Integrations.integration_id)
+                .join(db.ToolsCMS, db.ToolsCMS.tool_cms_id == db.ToolCMSIntegrationMap.tool_cms_id)
+                .filter(db.ToolsCMS.tool_id == id)
             )
 
         rows = query.all()
@@ -2181,32 +2113,32 @@ def list_integrations_for_entity(id, type, workspace_id=None, user_id=None):
     # Use provided user_id/workspace_id if given, else fallback to JWT
     user_id = user_id or jwt_user_id
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         results = []
         if str(type).lower() == 'agent':
             print("Fetching integrations for agent_id (user/workspace specific):", id)
-            if AMUIntegrationMapping and user_id and workspace_id:
+            if db.AMUIntegrationMapping and user_id and workspace_id:
                 # Get all integrations for this agent (from Integrations table)
                 all_integrations = (
                     session.query(
-                        Integrations.integration_id,
-                        Integrations.integration_name,
-                        Integrations.integration_logo_url,
-                        Integrations.integration_desc
+                        db.Integrations.integration_id,
+                        db.Integrations.integration_name,
+                        db.Integrations.integration_logo_url,
+                        db.Integrations.integration_desc
                     )
-                    .join(AgentCMSIntegrationMap, AgentCMSIntegrationMap.integration_id == Integrations.integration_id)
-                    .join(AgentsCMS, AgentsCMS.agent_cms_id == AgentCMSIntegrationMap.agent_cms_id)
-                    .filter(AgentsCMS.agent_id == id)
+                    .join(db.AgentCMSIntegrationMap, db.AgentCMSIntegrationMap.integration_id == db.Integrations.integration_id)
+                    .join(db.AgentsCMS, db.AgentsCMS.agent_cms_id == db.AgentCMSIntegrationMap.agent_cms_id)
+                    .filter(db.AgentsCMS.agent_id == id)
                 ).all()
                 # For each integration, check if mapping exists for user/workspace/agent/integration
                 for integ in all_integrations:
-                    mapping = session.query(AMUIntegrationMapping).filter(
-                        AMUIntegrationMapping.agent_id == id,
-                        AMUIntegrationMapping.user_id == user_id,
-                        AMUIntegrationMapping.workspace_id == workspace_id,
-                        AMUIntegrationMapping.integration_id == integ.integration_id
+                    mapping = session.query(db.AMUIntegrationMapping).filter(
+                        db.AMUIntegrationMapping.agent_id == id,
+                        db.AMUIntegrationMapping.user_id == user_id,
+                        db.AMUIntegrationMapping.workspace_id == workspace_id,
+                        db.AMUIntegrationMapping.integration_id == integ.integration_id
                     ).first()
                     connected = bool(mapping.connected) if mapping and hasattr(mapping, 'connected') else False
                     results.append({
@@ -2219,13 +2151,13 @@ def list_integrations_for_entity(id, type, workspace_id=None, user_id=None):
             else:
                 query = (
                     session.query(
-                        Integrations.integration_name,
-                        Integrations.integration_logo_url,
-                        Integrations.integration_desc
+                        db.Integrations.integration_name,
+                        db.Integrations.integration_logo_url,
+                        db.Integrations.integration_desc
                     )
-                    .join(AgentCMSIntegrationMap, AgentCMSIntegrationMap.integration_id == Integrations.integration_id)
-                    .join(AgentsCMS, AgentsCMS.agent_cms_id == AgentCMSIntegrationMap.agent_cms_id)
-                    .filter(AgentsCMS.agent_id == id)
+                    .join(db.AgentCMSIntegrationMap, db.AgentCMSIntegrationMap.integration_id == db.Integrations.integration_id)
+                    .join(db.AgentsCMS, db.AgentsCMS.agent_cms_id == db.AgentCMSIntegrationMap.agent_cms_id)
+                    .filter(db.AgentsCMS.agent_id == id)
                 )
                 for row in query.all():
                     results.append({
@@ -2237,24 +2169,24 @@ def list_integrations_for_entity(id, type, workspace_id=None, user_id=None):
                     })
         elif str(type).lower() == 'tool':
             print("Fetching integrations for tool_id (user/workspace specific):", id)
-            if TMUIntegrationMapping and user_id and workspace_id:
+            if db.TMUIntegrationMapping and user_id and workspace_id:
                 all_integrations = (
                     session.query(
-                        Integrations.integration_id,
-                        Integrations.integration_name,
-                        Integrations.integration_logo_url,
-                        Integrations.integration_desc
+                        db.Integrations.integration_id,
+                        db.Integrations.integration_name,
+                        db.Integrations.integration_logo_url,
+                        db.Integrations.integration_desc
                     )
-                    .join(ToolCMSIntegrationMap, ToolCMSIntegrationMap.integration_id == Integrations.integration_id)
-                    .join(ToolsCMS, ToolsCMS.tool_cms_id == ToolCMSIntegrationMap.tool_cms_id)
-                    .filter(ToolsCMS.tool_id == id)
+                    .join(db.ToolCMSIntegrationMap, db.ToolCMSIntegrationMap.integration_id == db.Integrations.integration_id)
+                    .join(db.ToolsCMS, db.ToolsCMS.tool_cms_id == db.ToolCMSIntegrationMap.tool_cms_id)
+                    .filter(db.ToolsCMS.tool_id == id)
                 ).all()
                 for integ in all_integrations:
-                    mapping = session.query(TMUIntegrationMapping).filter(
-                        TMUIntegrationMapping.tool_id == id,
-                        TMUIntegrationMapping.user_id == user_id,
-                        TMUIntegrationMapping.workspace_id == workspace_id,
-                        TMUIntegrationMapping.integration_id == integ.integration_id
+                    mapping = session.query(db.TMUIntegrationMapping).filter(
+                        db.TMUIntegrationMapping.tool_id == id,
+                        db.TMUIntegrationMapping.user_id == user_id,
+                        db.TMUIntegrationMapping.workspace_id == workspace_id,
+                        db.TMUIntegrationMapping.integration_id == integ.integration_id
                     ).first()
                     connected = bool(mapping.connected) if mapping and hasattr(mapping, 'connected') else False
                     results.append({
@@ -2267,13 +2199,13 @@ def list_integrations_for_entity(id, type, workspace_id=None, user_id=None):
             else:
                 query = (
                     session.query(
-                        Integrations.integration_name,
-                        Integrations.integration_logo_url,
-                        Integrations.integration_desc
+                        db.Integrations.integration_name,
+                        db.Integrations.integration_logo_url,
+                        db.Integrations.integration_desc
                     )
-                    .join(ToolCMSIntegrationMap, ToolCMSIntegrationMap.integration_id == Integrations.integration_id)
-                    .join(ToolsCMS, ToolsCMS.tool_cms_id == ToolCMSIntegrationMap.tool_cms_id)
-                    .filter(ToolsCMS.tool_id == id)
+                    .join(db.ToolCMSIntegrationMap, db.ToolCMSIntegrationMap.integration_id == db.Integrations.integration_id)
+                    .join(db.ToolsCMS, db.ToolsCMS.tool_cms_id == db.ToolCMSIntegrationMap.tool_cms_id)
+                    .filter(db.ToolsCMS.tool_id == id)
                 )
                 for row in query.all():
                     results.append({
@@ -2313,19 +2245,19 @@ async def toggle_integration_connection(user_id, workspace_id ,integration_id, i
     if not valid:
         return {"status": "error", "error": err}
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         
         if type == "agent":
-            user_connection = session.query(AMUIntegrationMapping).filter(
-                AMUIntegrationMapping.user_id == user_id,
-                AMUIntegrationMapping.agent_id == id,
-                AMUIntegrationMapping.workspace_id == workspace_id,
-                AMUIntegrationMapping.integration_id == integration_id
+            user_connection = session.query(db.AMUIntegrationMapping).filter(
+                db.AMUIntegrationMapping.user_id == user_id,
+                db.AMUIntegrationMapping.agent_id == id,
+                db.AMUIntegrationMapping.workspace_id == workspace_id,
+                db.AMUIntegrationMapping.integration_id == integration_id
             ).first()
             if not user_connection:
-                new_connection = AMUIntegrationMapping(
+                new_connection = db.AMUIntegrationMapping(
                     user_id=user_id,
                     agent_id=id,
                     workspace_id=workspace_id,
@@ -2340,14 +2272,14 @@ async def toggle_integration_connection(user_id, workspace_id ,integration_id, i
                 print("Toggled connection mapping connected to:", user_connection.connected)
             session.commit()
         else : # type == tool
-            user_connection = session.query(TMUIntegrationMapping).filter(
-                TMUIntegrationMapping.user_id == user_id,
-                TMUIntegrationMapping.agent_id == id,
-                TMUIntegrationMapping.workspace_id == workspace_id,
-                TMUIntegrationMapping.integration_id == integration_id
+            user_connection = session.query(db.TMUIntegrationMapping).filter(
+                db.TMUIntegrationMapping.user_id == user_id,
+                db.TMUIntegrationMapping.agent_id == id,
+                db.TMUIntegrationMapping.workspace_id == workspace_id,
+                db.TMUIntegrationMapping.integration_id == integration_id
             ).first()
             if not user_connection:
-                new_connection = TMUIntegrationMapping(
+                new_connection = db.TMUIntegrationMapping(
                     user_id=user_id,
                     agent_id=id,
                     workspace_id=workspace_id,
@@ -2399,35 +2331,35 @@ async def fetch_specific_agent_info(user_id, agent_id, workspace_id=0) -> dict:
     if not valid:
         return {"status": "error", "error": err}
 
-    session = Session()
+    session = db.Session()
     try:
         agent_values = session.query(
-            Agent.agent_name,
-            Agent.agent_id,
-            Agent.agent_desc,
-            AgentsCMS.agent_owner,
-            AgentsCMS.agent_contact,
-            AgentsCMS.agent_feature,
-            AgentsCMS.faqs,
-            AgentsCMS.last_updated,
-            Integrations.integration_id,
-            Integrations.integration_name,
-            Integrations.integration_logo_url,
-            FavouriteMappingAgent.favourite_id,
-            FavouriteMappingAgent.is_active
+            db.Agent.agent_name,
+            db.Agent.agent_id,
+            db.Agent.agent_desc,
+            db.AgentsCMS.agent_owner,
+            db.AgentsCMS.agent_contact,
+            db.AgentsCMS.agent_feature,
+            db.AgentsCMS.faqs,
+            db.AgentsCMS.last_updated,
+            db.Integrations.integration_id,
+            db.Integrations.integration_name,
+            db.Integrations.integration_logo_url,
+            db.FavouriteMappingAgent.favourite_id,
+            db.FavouriteMappingAgent.is_active
         ).filter(
-            Agent.agent_id == agent_id
+            db.Agent.agent_id == agent_id
         ).outerjoin(
-            AgentsCMS, AgentsCMS.agent_id == Agent.agent_id
+            db.AgentsCMS, db.AgentsCMS.agent_id == db.Agent.agent_id
         ).outerjoin(
-            AgentCMSIntegrationMap, AgentCMSIntegrationMap.agent_cms_id == AgentsCMS.agent_cms_id
+            db.AgentCMSIntegrationMap, db.AgentCMSIntegrationMap.agent_cms_id == db.AgentsCMS.agent_cms_id
         ).outerjoin(
-            Integrations, Integrations.integration_id == AgentCMSIntegrationMap.integration_id
+            db.Integrations, db.Integrations.integration_id == db.AgentCMSIntegrationMap.integration_id
         ).outerjoin(
-            FavouriteMappingAgent,
-            (FavouriteMappingAgent.agent_id == Agent.agent_id) &
-            (FavouriteMappingAgent.user_id == user_id) &
-            (FavouriteMappingAgent.workspace_id == workspace_id)
+            db.FavouriteMappingAgent,
+            (db.FavouriteMappingAgent.agent_id == db.Agent.agent_id) &
+            (db.FavouriteMappingAgent.user_id == user_id) &
+            (db.FavouriteMappingAgent.workspace_id == workspace_id)
         ).all()
 
         if not agent_values:
@@ -2442,14 +2374,14 @@ async def fetch_specific_agent_info(user_id, agent_id, workspace_id=0) -> dict:
                 break
 
         # Fetch workspaces where this agent exists
-        workspace_maps = session.query(AgentMap).filter(
-            AgentMap.agent_id == agent_id, AgentMap.is_active == True
+        workspace_maps = session.query(db.AgentMap).filter(
+            db.AgentMap.agent_id == agent_id, db.AgentMap.is_active == True
         ).all()
         workspace_ids = [wm.workspace_id for wm in workspace_maps]
         workspaces = []
         if workspace_ids:
-            ws_query = session.query(Workspace).filter(
-                Workspace.workspace_id.in_(workspace_ids), Workspace.is_active == True
+            ws_query = session.query(db.Workspace).filter(
+                db.Workspace.workspace_id.in_(workspace_ids), db.Workspace.is_active == True
             )
             for ws in ws_query:
                 workspaces.append({
@@ -2511,44 +2443,44 @@ async def fetch_specific_tool_info(user_id, tool_id, workspace_id=0) -> dict:
     if not valid:
         return {"status": "error", "error": err}
 
-    session = Session()
+    session = db.Session()
     try:
         tool_values = session.query(
-            Tool.tool_name,
-            Tool.tool_id,
-            Tool.tool_desc,
-            ToolsCMS.tool_owner,
-            ToolsCMS.tool_contact,
-            ToolsCMS.tool_feature,
-            ToolsCMS.faqs,
-            ToolsCMS.last_updated,
-            Integrations.integration_id,
-            Integrations.integration_name,
-            Integrations.integration_logo_url,
-            FavouriteMappingTool.favourite_id
+            db.Tool.tool_name,
+            db.Tool.tool_id,
+            db.Tool.tool_desc,
+            db.ToolsCMS.tool_owner,
+            db.ToolsCMS.tool_contact,
+            db.ToolsCMS.tool_feature,
+            db.ToolsCMS.faqs,
+            db.ToolsCMS.last_updated,
+            db.db.Integrations.integration_id,
+            db.db.Integrations.integration_name,
+            db.db.Integrations.integration_logo_url,
+            db.FavouriteMappingTool.favourite_id
         ).filter(
-            Tool.tool_id == tool_id
+            db.Tool.tool_id == tool_id
         ).outerjoin(
-            ToolsCMS, ToolsCMS.tool_id == Tool.tool_id
+            db.ToolsCMS, db.ToolsCMS.tool_id == db.Tool.tool_id
         ).outerjoin(
-            ToolCMSIntegrationMap, ToolCMSIntegrationMap.tool_cms_id == ToolsCMS.tool_cms_id
+            db.ToolCMSIntegrationMap, db.ToolCMSIntegrationMap.tool_cms_id == db.ToolsCMS.tool_cms_id
         ).outerjoin(
-            Integrations, Integrations.integration_id == ToolCMSIntegrationMap.integration_id
+            db.Integrations, db.db.Integrations.integration_id == db.ToolCMSIntegrationMap.integration_id
         ).outerjoin(
-            FavouriteMappingTool,
-            (FavouriteMappingTool.user_id == user_id) &
-            (FavouriteMappingTool.tool_id == tool_id) &
-            (FavouriteMappingTool.workspace_id == workspace_id)
+            db.FavouriteMappingTool,
+            (db.FavouriteMappingTool.user_id == user_id) &
+            (db.FavouriteMappingTool.tool_id == tool_id) &
+            (db.FavouriteMappingTool.workspace_id == workspace_id)
         ).all()
 
-        workspace_maps = session.query(ToolMap).filter(
-            ToolMap.tool_id == tool_id, ToolMap.is_active == True
+        workspace_maps = session.query(db.ToolMap).filter(
+            db.ToolMap.tool_id == tool_id, db.ToolMap.is_active == True
         ).all()
         workspace_ids = [wm.workspace_id for wm in workspace_maps]
         workspaces = []
         if workspace_ids:
-            ws_query = session.query(Workspace).filter(
-                Workspace.workspace_id.in_(workspace_ids), Workspace.is_active == True
+            ws_query = session.query(db.Workspace).filter(
+                db.Workspace.workspace_id.in_(workspace_ids), db.Workspace.is_active == True
             )
             for ws in ws_query:
                 workspaces.append({
@@ -2609,10 +2541,10 @@ def fetch_roles_list():
     if not jwt_user_id:
         return {"error": "Unauthorized: user_id not found in token claims"}
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
-        roles = session.query(Role).filter(Role.is_active == True).all()
+        roles = session.query(db.Role).filter(db.Role.is_active == True).all()
         
         # Define restricted roles that should NEVER be selectable when adding users to workspace
         # Only SDLC roles (Product Owner, Scrum Master, Developer, QA, etc.) should be visible
@@ -2666,7 +2598,7 @@ def add_user_to_workspace(workspace_id: int, user_email: str, role_id: int, firs
     is_admin = claims.get("is_admin", False)
     jwt_user_id = claims.get("user_id") or claims.get("sub")
     has_access = False
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         # Email validation
@@ -2679,16 +2611,16 @@ def add_user_to_workspace(workspace_id: int, user_email: str, role_id: int, firs
             has_access = True
         else:
             # Look up Workspace Admin role dynamically
-            workspace_admin_role = session.query(Role).filter(
-                Role.role_name.ilike("%workspace admin%"),
-                Role.is_active == True
+            workspace_admin_role = session.query(db.Role).filter(
+                db.Role.role_name.ilike("%workspace admin%"),
+                db.Role.is_active == True
             ).first()
             if workspace_admin_role:
-                user_role = session.query(UserRoleMap).filter(
-                    UserRoleMap.user_id == jwt_user_id,
-                    UserRoleMap.workspace_id == workspace_id,
-                    UserRoleMap.role_id == workspace_admin_role.role_id,
-                    UserRoleMap.is_active == True
+                user_role = session.query(db.UserRoleMap).filter(
+                    db.UserRoleMap.user_id == jwt_user_id,
+                    db.UserRoleMap.workspace_id == workspace_id,
+                    db.UserRoleMap.role_id == workspace_admin_role.role_id,
+                    db.UserRoleMap.is_active == True
                 ).first()
                 if user_role:
                     has_access = True
@@ -2697,7 +2629,7 @@ def add_user_to_workspace(workspace_id: int, user_email: str, role_id: int, firs
             return {"error": "You are not authorized to add users to this workspace. You must be a Workspace Admin or Forge-X Admin."}
 
         # Validate that the role being assigned is not a restricted role
-        role = session.query(Role).filter(Role.role_id == role_id, Role.is_active == True).first()
+        role = session.query(db.Role).filter(db.Role.role_id == role_id, db.Role.is_active == True).first()
         if not role:
             return {"error": f"Role with id '{role_id}' not found"}
         
@@ -2714,7 +2646,7 @@ def add_user_to_workspace(workspace_id: int, user_email: str, role_id: int, firs
         if role_name in restricted_roles:
             return {"error": f"Cannot assign restricted role '{role.role_name}'. Only SDLC roles can be assigned to workspace users."}
 
-        user = session.query(User).filter(func.lower(User.email_id) == email).first()
+        user = session.query(db.User).filter(func.lower(db.User.email_id) == email).first()
         print(f"[DEBUG] Checking if user exists for email: {email} -> Found: {user is not None}")
         
         notification = ""
@@ -2727,7 +2659,7 @@ def add_user_to_workspace(workspace_id: int, user_email: str, role_id: int, firs
             if not first_name or not last_name:
                 return {"error": "First name and last name required for new user."}
             print(f"[DEBUG] Creating new user with email: {email}")
-            new_user = User(
+            new_user = db.User(
                 namespace="default",  # Set default namespace
                 email_id=email,
                 first_name=first_name,
@@ -2740,19 +2672,19 @@ def add_user_to_workspace(workspace_id: int, user_email: str, role_id: int, firs
             notification = f"New user created and added to workspace."
 
         # Add to workspace_users_mapping
-        user_map = session.query(UserMap).filter(UserMap.user_id==user_id, UserMap.workspace_id==workspace_id).first()
+        user_map = session.query(db.UserMap).filter(db.UserMap.user_id==user_id, db.UserMap.workspace_id==workspace_id).first()
         if user_map and (not user_map.is_active):
             user_map.is_active = True
         elif not user_map:
-            session.add(UserMap(user_id=user_id, workspace_id=workspace_id, is_active=True))
+            session.add(db.UserMap(user_id=user_id, workspace_id=workspace_id, is_active=True))
 
         # Add/update user_role_mapping
-        user_role_map = session.query(UserRoleMap).filter(UserRoleMap.user_id==user_id, UserRoleMap.workspace_id==workspace_id).first()
+        user_role_map = session.query(db.UserRoleMap).filter(db.UserRoleMap.user_id==user_id, db.UserRoleMap.workspace_id==workspace_id).first()
         if user_role_map and (not user_role_map.is_active):
             user_role_map.role_id = role_id
             user_role_map.is_active = True
         elif not user_role_map:
-            session.add(UserRoleMap(user_id=user_id, workspace_id=workspace_id, role_id=role_id, is_active=True))
+            session.add(db.UserRoleMap(user_id=user_id, workspace_id=workspace_id, role_id=role_id, is_active=True))
 
         session.commit()
         return {"response": notification, "user_id": user_id, "email": email, "workspace_id": workspace_id, "role_id": role_id}
@@ -2774,24 +2706,24 @@ def list_workspace_users(workspace_id: int):
     if not jwt_user_id:
         return {"error": "Unauthorized: user_id not found in token claims"}
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         # Single optimized query: join UserMap, User, UserRoleMap, Role in one go
         users = (
             session.query(
-                User.user_id,
-                User.first_name,
-                User.last_name,
-                User.email_id,
-                Role.role_name,
-                Role.role_id,
-                UserMap.can_curate_kb
+                db.User.user_id,
+                db.User.first_name,
+                db.User.last_name,
+                db.User.email_id,
+                db.Role.role_name,
+                db.Role.role_id,
+                db.UserMap.can_curate_kb
             )
-            .join(UserMap, (UserMap.user_id == User.user_id) & (UserMap.workspace_id == workspace_id) & (UserMap.is_active == True))
-            .outerjoin(UserRoleMap, (UserRoleMap.user_id == User.user_id) & (UserRoleMap.workspace_id == workspace_id) & (UserRoleMap.is_active == True))
-            .outerjoin(Role, (UserRoleMap.role_id == Role.role_id) & (Role.is_active == True))
-            .filter(User.is_active == True)
+            .join(db.UserMap, (db.UserMap.user_id == db.User.user_id) & (db.UserMap.workspace_id == workspace_id) & (db.UserMap.is_active == True))
+            .outerjoin(db.UserRoleMap, (db.UserRoleMap.user_id == db.User.user_id) & (db.UserRoleMap.workspace_id == workspace_id) & (db.UserRoleMap.is_active == True))
+            .outerjoin(db.Role, (db.UserRoleMap.role_id == db.Role.role_id) & (db.Role.is_active == True))
+            .filter(db.User.is_active == True)
         ).all()
         result = [
             {
@@ -2833,23 +2765,23 @@ def remove_user_from_workspace(user_id: int, workspace_id: int, role_id: int):
     is_admin = claims.get("is_admin", False)
     jwt_user_id = claims.get("user_id") or claims.get("sub")
     has_access = False
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         if is_admin:
             has_access = True
         else:
             # Look up Workspace Admin role dynamically
-            workspace_admin_role = session.query(Role).filter(
-                Role.role_name.ilike("%workspace admin%"),
-                Role.is_active == True
+            workspace_admin_role = session.query(db.Role).filter(
+                db.Role.role_name.ilike("%workspace admin%"),
+                db.Role.is_active == True
             ).first()
             if workspace_admin_role:
-                user_role = session.query(UserRoleMap).filter(
-                    UserRoleMap.user_id == jwt_user_id,
-                    UserRoleMap.workspace_id == workspace_id,
-                    UserRoleMap.role_id == workspace_admin_role.role_id,
-                    UserRoleMap.is_active == True
+                user_role = session.query(db.UserRoleMap).filter(
+                    db.UserRoleMap.user_id == jwt_user_id,
+                    db.UserRoleMap.workspace_id == workspace_id,
+                    db.UserRoleMap.role_id == workspace_admin_role.role_id,
+                    db.UserRoleMap.is_active == True
                 ).first()
                 if user_role:
                     has_access = True
@@ -2858,11 +2790,11 @@ def remove_user_from_workspace(user_id: int, workspace_id: int, role_id: int):
             return {"error": "You are not authorized to remove users from this workspace. You must be a Workspace Admin or Forge-X Admin."}
 
         updated = False
-        user_map = session.query(UserMap).filter(UserMap.user_id==user_id, UserMap.workspace_id==workspace_id).first()
+        user_map = session.query(db.UserMap).filter(db.UserMap.user_id==user_id, db.UserMap.workspace_id==workspace_id).first()
         if user_map and hasattr(user_map, 'is_active'):
             user_map.is_active = False
             updated = True
-        user_role_map = session.query(UserRoleMap).filter(UserRoleMap.user_id==user_id, UserRoleMap.workspace_id==workspace_id, UserRoleMap.role_id==role_id).first()
+        user_role_map = session.query(db.UserRoleMap).filter(db.UserRoleMap.user_id==user_id, db.UserRoleMap.workspace_id==workspace_id, db.UserRoleMap.role_id==role_id).first()
         if user_role_map and hasattr(user_role_map, 'is_active'):
             user_role_map.is_active = False
             updated = True
@@ -2901,23 +2833,23 @@ def update_workspace_user(user_id: int, workspace_id: int, role_id: int, first_n
     is_admin = claims.get("is_admin", False)
     jwt_user_id = claims.get("user_id") or claims.get("sub")
     has_access = False
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         if is_admin:
             has_access = True
         else:
             # Look up Workspace Admin role dynamically
-            workspace_admin_role = session.query(Role).filter(
-                Role.role_name.ilike("%workspace admin%"),
-                Role.is_active == True
+            workspace_admin_role = session.query(db.Role).filter(
+                db.Role.role_name.ilike("%workspace admin%"),
+                db.Role.is_active == True
             ).first()
             if workspace_admin_role:
-                user_role = session.query(UserRoleMap).filter(
-                    UserRoleMap.user_id == jwt_user_id,
-                    UserRoleMap.workspace_id == workspace_id,
-                    UserRoleMap.role_id == workspace_admin_role.role_id,
-                    UserRoleMap.is_active == True
+                user_role = session.query(db.UserRoleMap).filter(
+                    db.UserRoleMap.user_id == jwt_user_id,
+                    db.UserRoleMap.workspace_id == workspace_id,
+                    db.UserRoleMap.role_id == workspace_admin_role.role_id,
+                    db.UserRoleMap.is_active == True
                 ).first()
                 if user_role:
                     has_access = True
@@ -2926,7 +2858,7 @@ def update_workspace_user(user_id: int, workspace_id: int, role_id: int, first_n
             return {"error": "You are not authorized to update users in this workspace. You must be a Workspace Admin or Forge-X Admin."}
 
         # Find role by id and validate it's not restricted
-        role = session.query(Role).filter(Role.role_id == role_id, Role.is_active == True).first()
+        role = session.query(db.Role).filter(db.Role.role_id == role_id, db.Role.is_active == True).first()
         if not role:
             return {"error": f"Role with id '{role_id}' not found"}
         
@@ -2943,12 +2875,12 @@ def update_workspace_user(user_id: int, workspace_id: int, role_id: int, first_n
         if role_name in restricted_roles:
             return {"error": f"Cannot assign restricted role '{role.role_name}'. Only SDLC roles can be assigned to workspace users."}
         # Update or create user_role_mapping
-        user_role_map = session.query(UserRoleMap).filter_by(user_id=user_id, workspace_id=workspace_id).first()
+        user_role_map = session.query(db.UserRoleMap).filter_by(user_id=user_id, workspace_id=workspace_id).first()
         if user_role_map:
             user_role_map.role_id = role_id
             user_role_map.is_active = True
         else:
-            session.add(UserRoleMap(user_id=user_id, workspace_id=workspace_id, role_id=role_id, is_active=True))
+            session.add(db.UserRoleMap(user_id=user_id, workspace_id=workspace_id, role_id=role_id, is_active=True))
         # Update can_curate_kb, first_name, last_name if provided in kwargs or request (support both legacy and new frontend)
         import inspect
         frame = inspect.currentframe()
@@ -2956,8 +2888,8 @@ def update_workspace_user(user_id: int, workspace_id: int, role_id: int, first_n
         can_curate_kb = values.get('can_curate_kb', None)
         first_name = values.get('first_name', None)
         last_name = values.get('last_name', None)
-        user_map = session.query(UserMap).filter_by(user_id=user_id, workspace_id=workspace_id).first()
-        user_obj = session.query(User).filter_by(user_id=user_id).first()
+        user_map = session.query(db.UserMap).filter_by(user_id=user_id, workspace_id=workspace_id).first()
+        user_obj = session.query(db.User).filter_by(user_id=user_id).first()
         if can_curate_kb is not None and user_map and hasattr(user_map, 'can_curate_kb'):
             user_map.can_curate_kb = can_curate_kb
         if first_name is not None and user_obj and hasattr(user_obj, 'first_name'):
@@ -3002,13 +2934,13 @@ def fetch_industry_info():
     if not jwt_user_id:
         return {"error": "Unauthorized: user_id not found in token claims"}
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
         # industries = session.query(Industry).all()
         # subindustries = session.query(SubIndustry).all()
-        industries = session.query(Industry).filter(Industry.is_active == True).all()
-        subindustries = session.query(SubIndustry).filter(SubIndustry.is_active == True).all()
+        industries = session.query(db.Industry).filter(db.Industry.is_active == True).all()
+        subindustries = session.query(db.SubIndustry).filter(db.SubIndustry.is_active == True).all()
 
         # Build mapping: industry_id -> list of subindustries
         sub_map = {}
@@ -3198,7 +3130,7 @@ def check_user_presence_by_email(user_email: str, workspace_id: int):
     if not jwt_user_id:
         return {"error": "Unauthorized: user_id not found in token claims"}
 
-    session = Session()
+    session = db.Session()
     try:
         session.rollback()
 
@@ -3207,16 +3139,16 @@ def check_user_presence_by_email(user_email: str, workspace_id: int):
         if is_admin:
             has_access = True
         else:
-            workspace_admin_role = session.query(Role).filter(
-                Role.role_name.ilike("%workspace admin%"),
-                Role.is_active == True
+            workspace_admin_role = session.query(db.Role).filter(
+                db.Role.role_name.ilike("%workspace admin%"),
+                db.Role.is_active == True
             ).first()
             if workspace_admin_role:
-                caller_ws_role = session.query(UserRoleMap).filter(
-                    UserRoleMap.user_id == jwt_user_id,
-                    UserRoleMap.workspace_id == workspace_id,
-                    UserRoleMap.role_id == workspace_admin_role.role_id,
-                    UserRoleMap.is_active == True
+                caller_ws_role = session.query(db.UserRoleMap).filter(
+                    db.UserRoleMap.user_id == jwt_user_id,
+                    db.UserRoleMap.workspace_id == workspace_id,
+                    db.UserRoleMap.role_id == workspace_admin_role.role_id,
+                    db.UserRoleMap.is_active == True
                 ).first()
                 if caller_ws_role:
                     has_access = True
@@ -3229,7 +3161,7 @@ def check_user_presence_by_email(user_email: str, workspace_id: int):
         if not email:
             return {"error": "user_email is required"}
 
-        user = session.query(User).filter(func.lower(User.email_id) == email).first()
+        user = session.query(db.User).filter(func.lower(db.User.email_id) == email).first()
 
         # Case 1: User doesn't exist in users table
         if not user:
@@ -3242,10 +3174,10 @@ def check_user_presence_by_email(user_email: str, workspace_id: int):
             }
 
         # Case 2/3: User exists; check workspace mapping (active only)
-        mapping = session.query(UserMap).filter(
-            UserMap.user_id == user.user_id,
-            UserMap.workspace_id == workspace_id,
-            UserMap.is_active == True
+        mapping = session.query(db.UserMap).filter(
+            db.UserMap.user_id == user.user_id,
+            db.UserMap.workspace_id == workspace_id,
+            db.UserMap.is_active == True
         ).first()
 
         present_in_workspace = bool(mapping)
@@ -3289,7 +3221,7 @@ def check_user_presence_by_email(user_email: str, workspace_id: int):
 #     Returns:
 #         dict: Success or error message
 #     """
-#     session = Session()
+#     session = db.Session()
 #     try:
 #         from datetime import datetime
 #         if agent_id:

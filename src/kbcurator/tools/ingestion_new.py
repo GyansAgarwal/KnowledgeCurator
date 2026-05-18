@@ -43,7 +43,8 @@ from crawl4ai.async_configs import BrowserConfig, CrawlerRunConfig, CacheMode, D
 from ..utils.azurecustomllm import AzureCustomLLM
 from ..utils.access_validation import validate_user_workspace_access
 from ..utils.request_context import request_var
-from .user_management_system import Session, UserMap
+from ..utils.db import db
+# from tools.userManagementSystem import Session,UserMap
  
 load_dotenv(os.path.abspath(os.path.join(os.getcwd(),'.env')))
  
@@ -1372,9 +1373,9 @@ async def upload_and_index_tool(
     jwt_user_id = user_id
 
     # Check if user is mapped to this workspace
-    session = Session()
+    session = db.Session()
     try:
-        user_map = session.query(UserMap).filter_by(workspace_id=workspace_id, user_id=jwt_user_id, is_active=True).first()
+        user_map = session.query(db.UserMap).filter_by(workspace_id=workspace_id, user_id=jwt_user_id, is_active=True).first()
         if not user_map:
             session.close()
             await ctx.debug("You are not authorized to access this workspace.")
@@ -1616,9 +1617,9 @@ async def check_indexing_status_by_workspace(
         return {"error": "Unauthorized: user_id not found in token claims"}
 
     # Check if user is mapped to this workspace
-    session = Session()
+    session = db.Session()
     try:
-        user_map = session.query(UserMap).filter_by(workspace_id=workspace_id, user_id=jwt_user_id, is_active=True).first()
+        user_map = session.query(db.UserMap).filter_by(workspace_id=workspace_id, user_id=jwt_user_id, is_active=True).first()
         if not user_map:
             session.close()
             await ctx.debug("You are not authorized to access this workspace.")
@@ -1802,9 +1803,9 @@ async def generate_download_urls_by_workspace(
         return {"error": "Unauthorized: user_id not found in token claims"}
 
     # Check if user is mapped to this workspace
-    session = Session()
+    session = db.Session()
     try:
-        user_map = session.query(UserMap).filter_by(workspace_id=workspace_id, user_id=jwt_user_id, is_active=True).first()
+        user_map = session.query(db.UserMap).filter_by(workspace_id=workspace_id, user_id=jwt_user_id, is_active=True).first()
         if not user_map:
             session.close()
             await ctx.debug("You are not authorized to access this workspace.")
