@@ -40,10 +40,10 @@ from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
 from crawl4ai import AsyncWebCrawler
 from crawl4ai.async_configs import BrowserConfig, CrawlerRunConfig, CacheMode, DefaultMarkdownGenerator
-from ..utils.azurecustomllm import AzureCustomLLM
-from ..utils.access_validation import validate_user_workspace_access
-from ..utils.request_context import request_var
-from ..utils.db import db
+from kbcurator.utils.azurecustomllm import AzureCustomLLM
+from kbcurator.utils.access_validation import validate_user_workspace_access
+from kbcurator.utils.request_context import request_var
+from kbcurator.utils.db import db
 # from tools.userManagementSystem import Session,UserMap
  
 load_dotenv(os.path.abspath(os.path.join(os.getcwd(),'.env')))

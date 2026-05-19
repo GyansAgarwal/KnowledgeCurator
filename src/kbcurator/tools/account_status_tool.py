@@ -1,7 +1,7 @@
 from os import getenv
 
 from ..server.server import mcp
-from ..utils.auth import _fetch_user_by_id, _fetch_user_workspaces
+from kbcurator.utils.auth import _fetch_user_by_id, _fetch_user_workspaces
 import logging
 
 logger = logging.getLogger(__name__)

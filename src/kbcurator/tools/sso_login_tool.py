@@ -1,7 +1,7 @@
 from os import getenv
 
-from ..utils.azure_sso import verify_microsoft_token
-from ..utils.auth import (
+from kbcurator.utils.azure_sso import verify_microsoft_token
+from kbcurator.utils.auth import (
     _assign_user_to_workspace,
     _create_user_with_workspace,
     _fetch_user_by_email,
