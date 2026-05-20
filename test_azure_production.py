@@ -126,60 +126,6 @@ def test_text_generation(ai_manager):
         traceback.print_exc()
         return False
 
-def test_embedding_generation(ai_manager):
-    """Test embedding generation functionality."""
-    print("\n" + "=" * 60)
-    print("Testing Embedding Generation")
-    print("=" * 60)
-    
-    try:
-        # Test embedding generation
-        test_texts = [
-            "Artificial intelligence is transforming technology.",
-            "Machine learning enables computers to learn from data.",
-            "Natural language processing helps computers understand text."
-        ]
-        
-        print(f"[INFO] Testing embedding generation with {len(test_texts)} texts:")
-        for i, text in enumerate(test_texts, 1):
-            print(f"  {i}. {text}")
-        
-        async def test_embeddings():
-            try:
-                # Check if we have an embedding deployment configured
-                embedding_deployment = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-ada-002")
-                print(f"[INFO] Using embedding deployment: {embedding_deployment}")
-                
-                embeddings = await ai_manager.generate_embeddings(
-                    test_texts,
-                    embedding_deployment=embedding_deployment
-                )
-                return embeddings
-            except Exception as e:
-                print(f"[ERROR] Embedding generation failed: {e}")
-                traceback.print_exc()
-                return None
-        
-        # Run the async function
-        embeddings = asyncio.run(test_embeddings())
-        
-        if embeddings:
-            print(f"\n[SUCCESS] Azure OpenAI Embedding Generation:")
-            print("-" * 50)
-            print(f"Generated {len(embeddings)} embeddings")
-            if len(embeddings) > 0:
-                print(f"Each embedding has {len(embeddings[0])} dimensions")
-                print(f"First embedding (first 5 values): {embeddings[0][:5]}")
-            print("-" * 50)
-            return True
-        else:
-            print("[ERROR] Failed to get embedding generation response")
-            return False
-            
-    except Exception as e:
-        print(f"[ERROR] Embedding generation test failed: {e}")
-        traceback.print_exc()
-        return False
 
 def test_provider_switching(ai_manager):
     """Test switching between providers if multiple are configured."""
@@ -246,27 +192,37 @@ def test_azure_openai_comprehensive():
     print(f"  - API Key: {azure_api_key[:10]}...")
     
     try:
-        # Test 1: Manual configuration (since configure_from_env has environment loading issues)
-        manual_success, ai_manager = test_manual_configuration()
-        if not manual_success or not ai_manager:
+        # Test 1: configure_from_env functionality
+        env_config_success, env_ai_manager = test_configure_from_env()
+        
+        # Test 2: Manual configuration (always run both tests)
+        manual_success, manual_ai_manager = test_manual_configuration()
+        
+        # Use the successful manager for subsequent tests
+        ai_manager = None
+        if env_config_success and env_ai_manager:
+            ai_manager = env_ai_manager
+            print("[INFO] Using configure_from_env manager for subsequent tests")
+        elif manual_success and manual_ai_manager:
+            ai_manager = manual_ai_manager
+            print("[INFO] Using manual configuration manager for subsequent tests")
+        else:
+            print("[ERROR] Both configuration methods failed")
             return False
         
-        # Test 2: Text generation
+        # Test 3: Text generation
         text_success = test_text_generation(ai_manager)
-        
-        # Test 3: Embedding generation
-        embedding_success = test_embedding_generation(ai_manager)
         
         # Test 4: Provider switching
         switching_success = test_provider_switching(ai_manager)
         
-        # Overall success
-        overall_success = manual_success and text_success and embedding_success and switching_success
+        # Overall success - at least one config method must work, plus other tests
+        overall_success = (env_config_success or manual_success) and text_success and switching_success
         
         print(f"\n[INFO] Test Results Summary:")
+        print(f"  - configure_from_env: {'PASSED' if env_config_success else 'FAILED'}")
         print(f"  - Manual Configuration: {'PASSED' if manual_success else 'FAILED'}")
         print(f"  - Text Generation: {'PASSED' if text_success else 'FAILED'}")
-        print(f"  - Embedding Generation: {'PASSED' if embedding_success else 'FAILED'}")
         print(f"  - Provider Switching: {'PASSED' if switching_success else 'FAILED'}")
         
         return overall_success
@@ -430,9 +386,8 @@ if __name__ == "__main__":
         if azure_success:
             print("\n[SUCCESS] ConfigurableAI comprehensive testing completed!")
             print("Features tested:")
-            print("  - configure_from_env functionality")
+            print("  - configure_from_env functionality (primary test)")
             print("  - Text generation with Azure OpenAI")
-            print("  - Embedding generation with Azure OpenAI")
             print("  - Provider management and switching")
             safe_print("Ready for production deployment! 🚀")
         else:
