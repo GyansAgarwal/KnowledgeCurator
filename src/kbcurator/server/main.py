@@ -8,7 +8,7 @@ import os
 from typing import List, Optional
 
 import uvicorn
-from .server import mcp
+from kbcurator.server.server import mcp
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
