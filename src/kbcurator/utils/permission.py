@@ -20,7 +20,7 @@ def get_user_role_id(user_id: int, workspace_id: Optional[int] = None) -> Option
 			result = session.execute(
 				text("""
 				SELECT role_id
-				FROM public.user_role_mapping
+				FROM public.workspace_users_mapping
 				WHERE user_id = :user_id
 				  AND workspace_id = :workspace_id
 				  AND is_active = TRUE
