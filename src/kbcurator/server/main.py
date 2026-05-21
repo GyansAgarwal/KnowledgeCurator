@@ -130,7 +130,11 @@ class SecurityAndCORSMiddleware(BaseHTTPMiddleware):
         raw = os.getenv("ALLOWED_ORIGINS", "").strip()
         if not raw:
             return None
-        return [o.strip() for o in raw.split(",") if o.strip()]
+        return [self._normalize_origin(o) for o in raw.split(",") if o.strip()]
+
+    def _normalize_origin(self, origin: str) -> str:
+        # Browsers send Origin without trailing slash. Normalize env/config values.
+        return origin.strip().rstrip("/").lower()
 
     def _bool_env(self, name: str, default: bool = False) -> bool:
         val = os.getenv(name, str(default)).strip().lower()
@@ -166,13 +170,19 @@ class SecurityAndCORSMiddleware(BaseHTTPMiddleware):
         allowed_origins = self._parse_allowed_origins()  # None => not set
         allow_credentials = self._bool_env("ALLOW_CREDENTIALS", default=False)
 
-        request_origin = request.headers.get("origin", "*")
+        request_origin_raw = request.headers.get("origin")
+
+        request_origin = (
+            self._normalize_origin(request_origin_raw)
+            if request_origin_raw and request_origin_raw != "*"
+            else None
+        )
         if allowed_origins:
             # Strict allowlist
-            if request_origin and request_origin in allowed_origins:
-                response.headers["Access-Control-Allow-Origin"] = (
-                    request_origin
-                )
+            if request_origin and (
+                request_origin in allowed_origins or "*" in allowed_origins
+            ):
+                response.headers["Access-Control-Allow-Origin"] = request_origin_raw
                 response.headers["Vary"] = "Origin"
             # else: no ACAO header, browser will block
         else:
@@ -181,7 +191,7 @@ class SecurityAndCORSMiddleware(BaseHTTPMiddleware):
             # - If not, allow any origin without credentials.
             if request_origin and allow_credentials:
                 response.headers["Access-Control-Allow-Origin"] = (
-                    request_origin
+                    request_origin_raw
                 )
                 response.headers["Vary"] = "Origin"
             else:
