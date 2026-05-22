@@ -46,7 +46,10 @@ from kbcurator.utils.request_context import request_var
 from kbcurator.utils.db import db
 # from tools.userManagementSystem import Session,UserMap
  
-load_dotenv(os.path.abspath(os.path.join(os.getcwd(),'.env')))
+# Load .env file if it exists (for local development)
+env_path = os.path.abspath(os.path.join(os.getcwd(), '.env'))
+if os.path.exists(env_path):
+    load_dotenv(env_path)
  
 azure_llm_api_key = os.getenv('AZURE_OPENAI_LLM_MODEL_API_KEY')
 azure_llm_api_base = os.getenv('AZURE_OPENAI_LLM_MODEL_API_BASE')
