@@ -91,10 +91,10 @@ def fetch_user_workflow_stage(user_id: int, workspace_id: int):
     try:
         session.rollback()
         # Fetch active role mapping for user in workspace
-        role_map = session.query(db.UserRoleMap).filter(
-                db.UserRoleMap.user_id == user_id,
-                db.UserRoleMap.workspace_id == workspace_id,
-                db.UserRoleMap.is_active == True
+        role_map = session.query(db.UserMap).filter(
+                db.UserMap.user_id == user_id,
+                db.UserMap.workspace_id == workspace_id,
+                db.UserMap.is_active == True
         ).first()
         if not role_map:
             return {"workflow_stage": "ALL", "role_id": None, "message": "No active role mapping found."}
@@ -201,15 +201,20 @@ def login_user(email: str, password: str):
                 user_details.pop('salt', None)
 
                 # Single-query fetch for user mappings, roles, workspaces (active only)
+                # NOTE: UserRoleMap is DEPRECATED - UserMap contains role_id
                 user_workspace_data = (
-                    session.query(db.UserMap, db.Workspace, db.UserRoleMap)
-                    .join(db.Workspace, db.UserMap.workspace_id == db.Workspace.workspace_id)
-                    .outerjoin(
-                        db.UserRoleMap,
-                        (db.UserRoleMap.user_id == db.UserMap.user_id) &
-                        (db.UserRoleMap.workspace_id == db.UserMap.workspace_id) &
-                        (db.UserRoleMap.is_active == True)
+                    session.query(db.UserMap, db.Workspace)
+                    .join(db.Workspace, 
+                        (db.UserMap.workspace_id == db.Workspace.workspace_id) &
+                        (db.UserMap.is_active == True)
                     )
+                    # DEPRECATED: UserRoleMap table is redundant
+                    # .outerjoin(
+                    #     db.UserRoleMap,
+                    #     (db.UserRoleMap.user_id == db.UserMap.user_id) &
+                    #     (db.UserRoleMap.workspace_id == db.UserMap.workspace_id) &
+                    #     (db.UserRoleMap.is_active == True)
+                    # )
                     .filter(db.UserMap.user_id == user.user_id)
                     .filter(db.Workspace.is_active == True)
                     .all()
@@ -220,7 +225,7 @@ def login_user(email: str, password: str):
                 workspace_ids_with_roles = set()
                 seen_workspaces = set()
 
-                for _, workspace, user_role_map in user_workspace_data:
+                for user_map, workspace in user_workspace_data:
                     workspace_id = workspace.workspace_id
 
                     if workspace_id not in seen_workspaces:
@@ -233,8 +238,9 @@ def login_user(email: str, password: str):
 
                     role_id = None
                     workflow_stage = "All"
-                    if user_role_map and hasattr(user_role_map, 'role_id'):
-                        role_id = user_role_map.role_id
+                    # Get role_id from UserMap (not UserRoleMap - it's deprecated)
+                    if user_map and hasattr(user_map, 'role_id'):
+                        role_id = user_map.role_id
                         if role_id is not None:
                             role_entry = session.query(db.Role).filter(
                                 db.Role.role_id == role_id,
@@ -250,7 +256,7 @@ def login_user(email: str, password: str):
                         workspace_ids_with_roles.add(workspace_id)
 
                 # Admin: ensure "All" stage for workspaces without explicit role
-                if getattr(user, 'is_admin', False):
+                if getattr(user, 'role_id', Role.USER.id) == Role.ADMIN.id:
                     for ws in workspaces:
                         if ws['workspace_id'] not in workspace_ids_with_roles:
                             user_roles.append({
@@ -366,23 +372,21 @@ def refresh_jwt_token(refresh_token: str = None):
             return {'success': False, 'message': 'User not found or inactive'}
         
         # Rebuild user roles and workspaces (same as login)
+        # NOTE: UserRoleMap is DEPRECATED - UserMap contains role_id
         user_roles = []
         workspaces = []
         
         user_workspace_data = (
-            session.query(db.UserMap, db.Workspace, db.UserRoleMap)
+            session.query(db.UserMap, db.Workspace)
             .join(db.Workspace, db.UserMap.workspace_id == db.Workspace.workspace_id)
-            .outerjoin(db.UserRoleMap, 
-                      (db.UserRoleMap.user_id == db.UserMap.user_id) & 
-                      (db.UserRoleMap.workspace_id == db.UserMap.workspace_id) &
-                      (db.UserRoleMap.is_active == True))
             .filter(db.UserMap.user_id == user.user_id)
+            .filter(db.UserMap.is_active == True)
             .filter(db.Workspace.is_active == True)
             .all()
         )
         
         seen_workspaces = set()
-        for _, workspace, user_role_map in user_workspace_data:
+        for user_map, workspace in user_workspace_data:
             workspace_id = workspace.workspace_id
             
             if workspace_id not in seen_workspaces:
@@ -393,8 +397,9 @@ def refresh_jwt_token(refresh_token: str = None):
                     'workspace_desc': workspace.workspace_desc
                 })
             
-            if user_role_map and hasattr(user_role_map, 'role_id'):
-                role_id = user_role_map.role_id
+            # Get role_id from UserMap (not UserRoleMap - it's deprecated)
+            if user_map and hasattr(user_map, 'role_id'):
+                role_id = user_map.role_id
                 if role_id is not None:
                     user_roles.append({
                         'workspace_id': workspace_id,
@@ -834,7 +839,7 @@ def _validate_workspace_type_and_kbs(session, claims: dict, fields: dict):
 
 
 def _workspace_name_exists(session, workspace_name: str) -> bool:
-    if not workspace_name:
+    if not workspace_name or not workspace_name.strip():
         return False
     existing_ws = (
         session.query(db.Workspace)
@@ -845,27 +850,40 @@ def _workspace_name_exists(session, workspace_name: str) -> bool:
 
 
 def _add_creator_workspace_admin(session, creator_id: int, workspace_id: int, namespace: str):
+    """
+    Add creator as Workspace Admin to the workspace.
+    NOTE: UserRoleMap table is DEPRECATED/REDUNDANT - all role info is in UserMap.
+    """
     admin_role_id = Role.WS_ADMIN.id
     user_map = session.query(db.UserMap).filter_by(user_id=creator_id, workspace_id=workspace_id).first()
     if not user_map:
-        session.add(db.UserMap(user_id=creator_id, workspace_id=workspace_id, is_active=True, can_curate_kb=True))
-
-    user_role_map = session.query(db.UserRoleMap).filter_by(user_id=creator_id, workspace_id=workspace_id).first()
-    if user_role_map:
-        user_role_map.role_id = admin_role_id
-        user_role_map.is_active = True
-    else:
+        # Create new UserMap entry with admin role
         session.add(
-            db.UserRoleMap(
+            db.UserMap(
                 user_id=creator_id,
                 workspace_id=workspace_id,
-                role_id=admin_role_id,
                 is_active=True,
+                can_curate_kb=True,
+                role_id=admin_role_id,
                 namespace=namespace,
                 created_date=datetime.now(timezone.utc),
                 last_updated=datetime.now(timezone.utc),
             )
         )
+    else:
+        # Update existing UserMap with admin role
+        user_map.role_id = admin_role_id
+        user_map.is_active = True
+        user_map.can_curate_kb = True
+        user_map.last_updated = datetime.now(timezone.utc)
+    
+    # DEPRECATED: UserRoleMap table is redundant - UserMap already has role_id
+    # user_role_map = session.query(db.UserRoleMap).filter_by(user_id=creator_id, workspace_id=workspace_id).first()
+    # if user_role_map:
+    #     user_role_map.role_id = admin_role_id
+    #     user_role_map.is_active = True
+    # else:
+    #     session.add(db.UserRoleMap(...))
 
 
 def _add_workspace_mappings(session, workspace_id: int, fields: dict, kb_ids: list[int]):
@@ -949,10 +967,19 @@ def create_workspace(payload):
         workspace_id = new_workspace.workspace_id
         print(f"Created workspace with ID: {workspace_id}")
 
-        _add_creator_workspace_admin(session, creator_id, workspace_id, namespace)
-        print(f"Added creator as Workspace Admin to workspace {workspace_id}")
+        try:
+            _add_creator_workspace_admin(session, creator_id, workspace_id, namespace)
+            print(f"[Transaction] Added creator as Workspace Admin to workspace {workspace_id}")
+        except Exception as user_map_error:
+            print(f"[Transaction] Failed to add creator as admin: {user_map_error}")
+            raise Exception(f"Failed to map creator to workspace: {str(user_map_error)}")
 
-        _add_workspace_mappings(session, workspace_id, fields, kb_ids)
+        try:
+            _add_workspace_mappings(session, workspace_id, fields, kb_ids)
+            print(f"[Transaction] Added workspace mappings for workspace {workspace_id}")
+        except Exception as mapping_error:
+            print(f"[Transaction] Failed to add workspace mappings: {mapping_error}")
+            raise Exception(f"Failed to add workspace mappings: {str(mapping_error)}")
 
         session.commit()
         return {'response': 'Workspace Created'}
@@ -1234,83 +1261,65 @@ def fetch_intent_agents_info(user_id=None, intent=None):
 @require_auth
 def update_workspace(payload):
     """
-    Update workspace details (name, description, tools, agents) using a payload dict.
-    Only Workspace Admin or Forge-X Admin can update workspaces.
+    Update workspace details (name, description, tools, agents, KBs, etc.) using a payload dict.
+    Only Workspace Admin can update workspaces.
     Args:
-        payload (dict): Should contain 'workspace_id', and optionally 'name', 'description', 'tool_ids', 'agent_ids'.
+        payload (dict): Should contain 'workspace_id', and optionally 'workspaceName', 'description', 'tool_ids', 'agent_ids', 'keywords', 'kb_ids', etc.
     Returns:
         dict: Response or error message.
     """
-    # RBAC: Only allow if JWT has is_admin True or user is Workspace Admin for this workspace
     claims, jwt_user_id = get_current_user()
-    is_admin = claims.get("is_admin", False)
-    has_access = False
     session = db.Session()
     try:
         session.rollback()
         workspace_id = payload.get('workspace_id')
-        if is_admin:
-            has_access = True
-        else:
-            # Check if user has Workspace Admin role for this workspace
-            admin_role = session.query(db.Role).filter(db.Role.role_name.ilike("%workspace admin%"), db.Role.is_active == True).first()
-            if admin_role:
-                user_role = session.query(db.UserRoleMap).filter(
-                    db.UserRoleMap.user_id == jwt_user_id,
-                    db.UserRoleMap.workspace_id == workspace_id,
-                    db.UserRoleMap.role_id == admin_role.role_id,
-                    db.UserRoleMap.is_active == True
-                ).first()
-                if user_role:
-                    has_access = True
-        if not has_access:
-            return {"error": "You are not authorized to update this workspace. Admin or Workspace Admin required."}
+        
+        if workspace_id is None:
+            return {'error': 'Missing Workspace id'}
+        
+        workspace_id = int(workspace_id)
+        
+        # RBAC: Only Workspace Admin can update
+        if not validate_admin(jwt_user_id, workspace_id):
+            return {"error": "You are not authorized to update this workspace. Only Workspace Admin can update workspaces."}
 
-        name = payload.get('workspaceName')
-        description = payload.get('description')
-        tool_ids = payload.get('tool_ids')
-        agent_ids = payload.get('agent_ids')
-        namespace = payload.get('namespace')
-        intent = payload.get('intent')
-        industry = payload.get('industry')
-        sub_industry = payload.get('subIndustry')
-        keywords = payload.get('keywords', [])
-        kb_ids = payload.get('kb_ids', [])
-        kb_title = payload.get('kb_title', [])
-        kb_description = payload.get('kb_description', [])
-
-        ws = session.query(db.Workspace).filter(db.Workspace.workspace_id==workspace_id, db.Workspace.is_active==True).first()
+        ws = session.query(db.Workspace).filter(
+            db.Workspace.workspace_id == workspace_id,
+            db.Workspace.is_active == True
+        ).first()
         if not ws:
             return {"error": "Workspace not found or inactive"}
-        if name and ws.workspace_name != name:
-            existing_ws = (
-                session.query(db.Workspace)
-                .filter(
-                    db.Workspace.workspace_name == name,
-                    db.Workspace.is_active == True,
-                )
-                .first()
-            )
-            if existing_ws:
-                return {"error": f"Workspace with name '{name}' already exists on the platform. Please choose a different name."}
-            else:
-                ws.workspace_name = name
-        if description:
-            ws.workspace_desc = description
-        if namespace:
-            ws.namespace = namespace
-        if keywords:
-            ws.keywords = ','.join(keywords)
-        # Update WIIM mappings for KBs: remove all old, insert new for each selected KB
+
+        # Extract and validate payload
+        fields = _extract_workspace_payload(payload)
+        
+        # Validate workspace type and KBs (validates keywords and kb_ids)
+        normalized_keyword, kb_ids, validation_error = _validate_workspace_type_and_kbs(session, claims, fields)
+        if validation_error:
+            return validation_error
+
+        # Update workspace master fields
+        if fields.get('workspace_name'):
+            ws.workspace_name = fields['workspace_name']
+        if fields.get('workspace_desc'):
+            ws.workspace_desc = fields['workspace_desc']
+        if fields.get('namespace'):
+            ws.namespace = fields['namespace']
+        if normalized_keyword:
+            ws.keywords = normalized_keyword
+        ws.last_updated = datetime.now(timezone.utc)
+
+        # Update WIIM mappings for KBs
+        industry = fields.get('industry')
+        sub_industry = fields.get('sub_industry')
+        intent = fields.get('intent')
         if db.WorkspaceIndustrySubIndustryMap and industry and sub_industry and intent and kb_ids is not None:
-            # Remove all existing WIIM rows for this workspace/industry/intent/subindustry
             session.query(db.WorkspaceIndustrySubIndustryMap).filter(
-                db.WorkspaceIndustrySubIndustryMap.workspace_id==workspace_id,
-                db.WorkspaceIndustrySubIndustryMap.industry_id==industry,
-                db.WorkspaceIndustrySubIndustryMap.subindustry_id==sub_industry,
-                db.WorkspaceIndustrySubIndustryMap.intent_id==intent
+                db.WorkspaceIndustrySubIndustryMap.workspace_id == workspace_id,
+                db.WorkspaceIndustrySubIndustryMap.industry_id == industry,
+                db.WorkspaceIndustrySubIndustryMap.subindustry_id == sub_industry,
+                db.WorkspaceIndustrySubIndustryMap.intent_id == intent
             ).delete(synchronize_session=False)
-            # Insert new WIIM rows for each selected KB
             for kb_id in kb_ids:
                 session.add(db.WorkspaceIndustrySubIndustryMap(
                     workspace_id=workspace_id,
@@ -1318,72 +1327,79 @@ def update_workspace(payload):
                     subindustry_id=sub_industry,
                     intent_id=intent,
                     kb_id=kb_id,
-                    is_active=True))
-        # Update or insert tools
-        # Update last_updated timestamp
-        from datetime import datetime
-        if hasattr(ws, 'last_updated'):
-            ws.last_updated = datetime.utcnow()
-        if tool_ids is not None:
-            # Mark all existing mappings as inactive
-            session.query(db.ToolMap).filter(db.ToolMap.workspace_id==workspace_id).update({db.ToolMap.is_active: False})
-            for tid in tool_ids:
-                tool_map = session.query(db.ToolMap).filter(db.ToolMap.workspace_id==workspace_id, db.ToolMap.tool_id==tid).first()
-                if tool_map:
-                    tool_map.is_active = True
-                else:
-                    session.add(db.ToolMap(workspace_id=workspace_id, tool_id=tid, is_active=True))
-        # Update or insert agents
+                    is_active=True
+                ))
+
+        # Update agent mappings: mark all inactive, then activate/create new ones
+        agent_ids = fields.get('agent_ids') or []
         if agent_ids is not None:
-            # Mark all existing mappings as inactive
-            session.query(db.AgentMap).filter(db.AgentMap.workspace_id==workspace_id).update({db.AgentMap.is_active: False})
+            session.query(db.AgentMap).filter(
+                db.AgentMap.workspace_id == workspace_id
+            ).update({db.AgentMap.is_active: False}, synchronize_session=False)
+            
             for aid in agent_ids:
-                agent_map = session.query(db.AgentMap).filter(db.AgentMap.workspace_id==workspace_id, db.AgentMap.agent_id==aid).first()
-                if agent_map:
-                    agent_map.is_active = True
+                existing = session.query(db.AgentMap).filter_by(
+                    workspace_id=workspace_id,
+                    agent_id=aid
+                ).first()
+                if existing:
+                    existing.is_active = True
                 else:
-                    session.add(db.AgentMap(workspace_id=workspace_id, agent_id=aid, is_active=True))
-        # No KBM update or creation here
+                    session.add(db.AgentMap(
+                        workspace_id=workspace_id,
+                        agent_id=aid,
+                        is_active=True
+                    ))
+
+        # Update tool mappings: mark all inactive, then activate/create new ones
+        tool_ids = fields.get('tool_ids') or []
+        if tool_ids is not None:
+            session.query(db.ToolMap).filter(
+                db.ToolMap.workspace_id == workspace_id
+            ).update({db.ToolMap.is_active: False}, synchronize_session=False)
+            
+            for tid in tool_ids:
+                existing = session.query(db.ToolMap).filter_by(
+                    workspace_id=workspace_id,
+                    tool_id=tid
+                ).first()
+                if existing:
+                    existing.is_active = True
+                else:
+                    session.add(db.ToolMap(
+                        workspace_id=workspace_id,
+                        tool_id=tid,
+                        is_active=True
+                    ))
+
         session.commit()
         return {"response": "Workspace updated"}
     except Exception as e:
         session.rollback()
         print(f"Error in update_workspace: {e}")
-        return {"error": "An error occurred while updating workspace."}
+        return {"error": f"An error occurred while updating workspace: {str(e)}"}
     finally:
-        session.close() 
+        session.close()
 
 @mcp.tool()
 @require_auth
 def delete_workspace(workspace_id):
     '''
     Delete workspace: set is_active to False
+    Only Workspace Admin can delete workspaces.
     '''
-    # RBAC: Only allow if JWT has is_admin True
     claims, jwt_user_id = get_current_user()
-    is_admin = claims.get("is_admin", False)
-    has_access = False
-    if is_admin:
-        has_access = True
-    else:
-        session = db.Session()
-        admin_role = session.query(db.Role).filter(db.Role.role_name.ilike("%workspace admin%"), db.Role.is_active == True).first()
-        if admin_role:
-            user_role = session.query(db.UserRoleMap).filter(
-                db.UserRoleMap.user_id == jwt_user_id,
-                db.UserRoleMap.workspace_id == workspace_id,
-                db.UserRoleMap.role_id == admin_role.role_id,
-                db.UserRoleMap.is_active == True
-            ).first()
-            if user_role:
-                has_access = True
-        session.close()
-    if not has_access:
-        return {"error": "You are not authorized to delete a workspace. Admin or Workspace Admin required."}
-
     session = db.Session()
     try:
+        if workspace_id is None:
+            return {'error': 'Missing Workspace id'}
+        
+        workspace_id = int(workspace_id)
         session.rollback()
+        # Check if user has Workspace Admin role for this workspace
+        if not validate_admin(jwt_user_id, workspace_id):
+            return {"error": "You are not authorized to delete a workspace. Only Workspace Admin can delete workspaces."}
+
         ws = session.query(db.Workspace).filter(db.Workspace.workspace_id==workspace_id, db.Workspace.is_active==True).first()
         if not ws:
             return {"error": "Workspace not found or already inactive"}
@@ -1571,23 +1587,24 @@ def fetch_workspace_details(workspace_id):
                 agents.append(agent_dict)
 
         # Users in workspace (with role/permissions, only active)
-        # OPTIMIZED: Single JOIN query instead of N queries
+        # OPTIMIZED: Single JOIN query - UserMap contains role_id, no need for UserRoleMap
+        # NOTE: UserRoleMap table is DEPRECATED - all role info is in UserMap
         users = []
         user_data_query = (
-            session.query(db.User, db.UserRoleMap, db.Role, db.UserMap)
+            session.query(db.User, db.Role, db.UserMap)
             .join(db.UserMap, db.UserMap.user_id == db.User.user_id)
-            .outerjoin(db.UserRoleMap, (db.UserRoleMap.user_id == db.User.user_id) & (db.UserRoleMap.workspace_id == workspace_id) & (db.UserRoleMap.is_active == True))
-            .outerjoin(db.Role, (db.UserRoleMap.role_id == db.Role.role_id) & (db.Role.is_active == True))
+            .outerjoin(db.Role, (db.UserMap.role_id == db.Role.role_id) & (db.Role.is_active == True))
             .filter(db.UserMap.workspace_id == workspace_id, db.UserMap.is_active == True)
         )
         if hasattr(db.User, 'is_active'):
             user_data_query = user_data_query.filter(db.User.is_active == True)
 
-        for user, user_role_map, role, user_map in user_data_query.all():
+        for user, role, user_map in user_data_query.all():
             user_dict = {col: getattr(user, col) for col in user.__table__.columns.keys()}
+            # Get role info from UserMap (which has role_id) joined with Role table
             user_dict['role'] = getattr(role, 'role_name', None) if role else None
-            user_dict['role_id'] = getattr(role, 'role_id', None) if role else None
-            user_dict['permissions'] = getattr(user_role_map, 'permissions', None) if user_role_map else None
+            user_dict['role_id'] = getattr(user_map, 'role_id', None)  # role_id is in UserMap
+            user_dict['permissions'] = getattr(user_map, 'permissions', None)  # permissions is in UserMap
             user_dict['can_curate_kb'] = getattr(user_map, 'can_curate_kb', None)
             users.append(user_dict)
 
@@ -2498,9 +2515,9 @@ async def fetch_specific_tool_info(user_id, tool_id, workspace_id=0) -> dict:
             db.ToolsCMS.tool_feature,
             db.ToolsCMS.faqs,
             db.ToolsCMS.last_updated,
-            db.db.Integrations.integration_id,
-            db.db.Integrations.integration_name,
-            db.db.Integrations.integration_logo_url,
+            db.Integrations.integration_id,
+            db.Integrations.integration_name,
+            db.Integrations.integration_logo_url,
             db.FavouriteMappingTool.favourite_id
         ).filter(
             db.Tool.tool_id == tool_id
@@ -2509,7 +2526,7 @@ async def fetch_specific_tool_info(user_id, tool_id, workspace_id=0) -> dict:
         ).outerjoin(
             db.ToolCMSIntegrationMap, db.ToolCMSIntegrationMap.tool_cms_id == db.ToolsCMS.tool_cms_id
         ).outerjoin(
-            db.Integrations, db.db.Integrations.integration_id == db.ToolCMSIntegrationMap.integration_id
+            db.Integrations, db.Integrations.integration_id == db.ToolCMSIntegrationMap.integration_id
         ).outerjoin(
             db.FavouriteMappingTool,
             (db.FavouriteMappingTool.user_id == user_id) &
@@ -2575,11 +2592,11 @@ def _get_sdlc_role_ids() -> list[int]:
 
 def _get_active_workspace_role_id(session, user_id: int, workspace_id: int):
     role_map = (
-        session.query(db.UserRoleMap)
+        session.query(db.UserMap)
         .filter(
-            db.UserRoleMap.user_id == user_id,
-            db.UserRoleMap.workspace_id == workspace_id,
-            db.UserRoleMap.is_active == True,
+            db.UserMap.user_id == user_id,
+            db.UserMap.workspace_id == workspace_id,
+            db.UserMap.is_active == True,
         )
         .first()
     )
@@ -2648,6 +2665,7 @@ def fetch_addable_roles_by_workspace(workspace_id: int):
         session.close()
 
 
+# TODO: Will Deprecate it soon. Alternate tool added (fetch_addable_roles_by_workspace)
 @mcp.tool()
 @require_auth
 def fetch_roles_list():
@@ -2742,10 +2760,10 @@ def add_user_to_workspace(workspace_id: int, user_email: str, role_id: int, firs
                 )
             }
 
-        # Validate target role exists and is active
-        role = session.query(db.Role).filter(db.Role.role_id == role_id, db.Role.is_active == True).first()
-        if not role:
-            return {"error": f"Role with id '{role_id}' not found"}
+        # # Validate target role exists and is active
+        # role = session.query(db.Role).filter(db.Role.role_id == role_id, db.Role.is_active == True).first()
+        # if not role:
+        #     return {"error": f"Role with id '{role_id}' not found"}
 
         user = session.query(db.User).filter(func.lower(db.User.email_id) == email).first()
         print(f"[DEBUG] Checking if user exists for email: {email} -> Found: {user is not None}")
@@ -2775,19 +2793,31 @@ def add_user_to_workspace(workspace_id: int, user_email: str, role_id: int, firs
 
         # Add to workspace_users_mapping
         user_map = session.query(db.UserMap).filter(db.UserMap.user_id==user_id, db.UserMap.workspace_id==workspace_id).first()
+        workspace = session.query(db.Workspace).filter(db.Workspace.workspace_id == workspace_id).first()
         if user_map and (not user_map.is_active):
             user_map.is_active = True
+            user_map.role_id = role_id
         elif not user_map:
-            session.add(db.UserMap(user_id=user_id, workspace_id=workspace_id, is_active=True))
+            session.add(
+                db.UserMap(
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    is_active=True,
+                    role_id=role_id,
+                    namespace=workspace.namespace,
+                    created_date=datetime.now(timezone.utc),
+                    last_updated=datetime.now(timezone.utc),
+                )
+            )
 
-        # Add/update user_role_mapping
-        user_role_map = session.query(db.UserRoleMap).filter(db.UserRoleMap.user_id==user_id, db.UserRoleMap.workspace_id==workspace_id).first()
-        if user_role_map and (not user_role_map.is_active):
-            user_role_map.role_id = role_id
-            user_role_map.is_active = True
-        elif not user_role_map:
-            workspace = session.query(db.Workspace).filter(db.Workspace.workspace_id == workspace_id).first()
-            session.add(db.UserRoleMap(user_id=user_id, workspace_id=workspace_id, role_id=role_id, is_active=True, created_date = datetime.now(timezone.utc), last_updated=datetime.now(timezone.utc), namespace=workspace.namespace))
+        # DEPRECATED: UserRoleMap table is redundant - UserMap already contains role_id and all related fields
+        # add/update user_role_mapping
+        # user_role_map = session.query(db.UserRoleMap).filter(db.UserRoleMap.user_id==user_id, db.UserRoleMap.workspace_id==workspace_id).first()
+        # if user_role_map and (not user_role_map.is_active):
+        #     user_role_map.role_id = role_id
+        #     user_role_map.is_active = True
+        # elif not user_role_map:
+        #     session.add(db.UserRoleMap(user_id=user_id, workspace_id=workspace_id, role_id=role_id, is_active=True, created_date = datetime.now(timezone.utc), last_updated=datetime.now(timezone.utc), namespace=workspace.namespace))
 
         session.commit()
         return {"response": notification, "user_id": user_id, "email": email, "workspace_id": workspace_id, "role_id": role_id}
@@ -2804,7 +2834,7 @@ def list_workspace_users(workspace_id: int):
     session = db.Session()
     try:
         session.rollback()
-        # Single optimized query: join UserMap, User, UserRoleMap, Role in one go
+        # Single optimized query: join UserMap, User, Role (NOTE: UserRoleMap is DEPRECATED/redundant)
         users = (
             session.query(
                 db.User.user_id,
@@ -2815,9 +2845,15 @@ def list_workspace_users(workspace_id: int):
                 db.Role.role_id,
                 db.UserMap.can_curate_kb
             )
-            .join(db.UserMap, (db.UserMap.user_id == db.User.user_id) & (db.UserMap.workspace_id == workspace_id) & (db.UserMap.is_active == True))
-            .outerjoin(db.UserRoleMap, (db.UserRoleMap.user_id == db.User.user_id) & (db.UserRoleMap.workspace_id == workspace_id) & (db.UserRoleMap.is_active == True))
-            .outerjoin(db.Role, (db.UserRoleMap.role_id == db.Role.role_id) & (db.Role.is_active == True))
+            .join(db.UserMap, 
+                (db.UserMap.user_id == db.User.user_id) & 
+                (db.UserMap.workspace_id == workspace_id) & 
+                (db.UserMap.is_active == True)
+            )
+            .outerjoin(db.Role, 
+                (db.UserMap.role_id == db.Role.role_id) & 
+                (db.Role.is_active == True)
+            )
             .filter(db.User.is_active == True)
         ).all()
         result = [
@@ -2841,10 +2877,10 @@ def list_workspace_users(workspace_id: int):
 
 @mcp.tool()
 @require_auth
-def remove_user_from_workspace(user_id: int, workspace_id: int, role_id: int):
+def remove_user_from_workspace(user_id: int, workspace_id: int):
     """
     Remove a user from a workspace (set is_active = False in mapping tables).
-    Only Workspace Admin or Forge-X Admin can remove users.
+    Only Workspace Admin or Workspace Manager can remove users.
     Args:
         user_id (int): User ID
         workspace_id (int): Workspace ID
@@ -2853,48 +2889,40 @@ def remove_user_from_workspace(user_id: int, workspace_id: int, role_id: int):
     """
     if user_id is None:
         return {"status": "error", "error": "user_id cannot be null"}
-    # RBAC: Only allow if JWT has is_admin True or user has role_id==3 for this workspace
-    claims, jwt_user_id = get_current_user()
-    is_admin = claims.get("is_admin", False)
-    has_access = False
+    
+    _, jwt_user_id = get_current_user()
     session = db.Session()
     try:
         session.rollback()
-        if is_admin:
-            has_access = True
-        else:
-            # Look up Workspace Admin role dynamically
-            workspace_admin_role = session.query(db.Role).filter(
-                db.Role.role_name.ilike("%workspace admin%"),
-                db.Role.is_active == True
-            ).first()
-            if workspace_admin_role:
-                user_role = session.query(db.UserRoleMap).filter(
-                    db.UserRoleMap.user_id == jwt_user_id,
-                    db.UserRoleMap.workspace_id == workspace_id,
-                    db.UserRoleMap.role_id == workspace_admin_role.role_id,
-                    db.UserRoleMap.is_active == True
-                ).first()
-                if user_role:
-                    has_access = True
-        
-        if not has_access:
-            return {"error": "You are not authorized to remove users from this workspace. You must be a Workspace Admin or Forge-X Admin."}
 
-        updated = False
-        user_map = session.query(db.UserMap).filter(db.UserMap.user_id==user_id, db.UserMap.workspace_id==workspace_id).first()
-        if user_map and hasattr(user_map, 'is_active'):
-            user_map.is_active = False
-            updated = True
-        user_role_map = session.query(db.UserRoleMap).filter(db.UserRoleMap.user_id==user_id, db.UserRoleMap.workspace_id==workspace_id, db.UserRoleMap.role_id==role_id).first()
-        if user_role_map and hasattr(user_role_map, 'is_active'):
-            user_role_map.is_active = False
-            updated = True
-        if updated:
-            session.commit()
-            return {'response': 'User removed from the workspace'}
-        else:
-            return {'error': 'Mapping not found'}
+        caller_role_id = _get_active_workspace_role_id(
+            session=session,
+            user_id=jwt_user_id,
+            workspace_id=workspace_id,
+        )
+        if caller_role_id not in {Role.WS_ADMIN.id, Role.WS_MANAGER.id}:
+            return {
+                "error": (
+                    "You are not authorized to remove users from this workspace. "
+                    "You must be a Workspace Admin or Workspace Manager."
+                )
+            }
+
+        user_map = session.query(db.UserMap).filter(
+            db.UserMap.user_id == user_id,
+            db.UserMap.workspace_id == workspace_id,
+            db.UserMap.is_active == True,
+        ).first()
+        if not user_map:
+            return {"error": "User does not exist in workspace."}
+
+        target_role_id = getattr(user_map, "role_id", None)
+        if target_role_id == Role.WS_ADMIN.id and caller_role_id == Role.WS_MANAGER.id:
+            return {"error": "Workspace Manager cannot remove admin users from this workspace."}
+
+        user_map.is_active = False
+        session.commit()
+        return {'response': 'User removed from the workspace'}
     except Exception as e:
         session.rollback()
         print(f"Error in remove_user_from_workspace: {e}")
@@ -2907,87 +2935,100 @@ def remove_user_from_workspace(user_id: int, workspace_id: int, role_id: int):
 def update_workspace_user(user_id: int, workspace_id: int, role_id: int, first_name: str = None, last_name: str = None):
     """
     Update a user's role in a workspace by role_id.
-    Only Workspace Admin or Forge-X Admin can update user roles.
-    Cannot assign restricted roles (Forge-X admin, Workspace admin, SME, Knowledge Curator, DoD).
+    Only Workspace Admin or Workspace Manager can update user roles.
+    Cannot assign roles that the caller is not authorized to assign.
     Args:
         user_id (int): User ID
         workspace_id (int): Workspace ID
-        role_id (int): Role ID to assign (must be an SDLC role)
+        role_id (int): Role ID to assign
+        first_name (str, optional): First name to update
+        last_name (str, optional): Last name to update
     Returns:
         dict: Success or error message
     """
     if user_id is None:
         return {"status": "error", "error": "user_id cannot be null"}
-    # RBAC: Only allow if JWT has is_admin True or user has role_id==3 for this workspace
-    claims, jwt_user_id = get_current_user()
-    is_admin = claims.get("is_admin", False)
-    has_access = False
+    
+    _, jwt_user_id = get_current_user()
     session = db.Session()
     try:
         session.rollback()
-        if is_admin:
-            has_access = True
-        else:
-            # Look up Workspace Admin role dynamically
-            workspace_admin_role = session.query(db.Role).filter(
-                db.Role.role_name.ilike("%workspace admin%"),
-                db.Role.is_active == True
-            ).first()
-            if workspace_admin_role:
-                user_role = session.query(db.UserRoleMap).filter(
-                    db.UserRoleMap.user_id == jwt_user_id,
-                    db.UserRoleMap.workspace_id == workspace_id,
-                    db.UserRoleMap.role_id == workspace_admin_role.role_id,
-                    db.UserRoleMap.is_active == True
-                ).first()
-                if user_role:
-                    has_access = True
         
-        if not has_access:
-            return {"error": "You are not authorized to update users in this workspace. You must be a Workspace Admin or Forge-X Admin."}
+        # Validate role_id
+        try:
+            role_id = int(role_id)
+        except (TypeError, ValueError):
+            return {"error": "role_id must be a valid integer."}
+        
+        # Check authorization using helper function
+        assignable_role_ids, caller_role_id = _get_assignable_role_ids(
+            session=session,
+            user_id=jwt_user_id,
+            workspace_id=workspace_id,
+        )
+        if not assignable_role_ids:
+            return {
+                "error": (
+                    "You are not authorized to update users in this workspace. "
+                    "Only Workspace Admin or Workspace Manager can update users."
+                )
+            }
 
-        # Find role by id and validate it's not restricted
-        role = session.query(db.Role).filter(db.Role.role_id == role_id, db.Role.is_active == True).first()
-        if not role:
-            return {"error": f"Role with id '{role_id}' not found"}
+        if role_id not in assignable_role_ids:
+            return {
+                "error": (
+                    f"You cannot assign '{Role.get_by_id(role_id)}' role in this workspace."
+                )
+            }
+
+        # Validate target role exists and is active
+        # role = session.query(db.Role).filter(db.Role.role_id == role_id, db.Role.is_active == True).first()
+        # if not role:
+        #     return {"error": f"Role with id '{role_id}' not found"}
         
-        role_name = getattr(role, 'role_name', '').strip().lower()
-        restricted_roles = {
-            "forge-x admin",
-            "workspace admin",      # Correct spelling
-            "worksapce admin",      # Typo in database
-            "sme",
-            "knowledge curator",
-            "dod"
-        }
-        
-        if role_name in restricted_roles:
-            return {"error": f"Cannot assign restricted role '{role.role_name}'. Only SDLC roles can be assigned to workspace users."}
-        # Update or create user_role_mapping
-        user_role_map = session.query(db.UserRoleMap).filter_by(user_id=user_id, workspace_id=workspace_id).first()
-        if user_role_map:
-            user_role_map.role_id = role_id
-            user_role_map.is_active = True
+        # Update or create user workspace mapping
+        # NOTE: UserRoleMap table is DEPRECATED - all role info is in UserMap
+        workspace_user_map = session.query(db.UserMap).filter_by(user_id=user_id, workspace_id=workspace_id).first()
+        if workspace_user_map:
+            workspace_user_map.role_id = role_id
+            workspace_user_map.is_active = True
+            workspace_user_map.last_updated = datetime.now(timezone.utc)
         else:
-            session.add(db.UserRoleMap(user_id=user_id, workspace_id=workspace_id, role_id=role_id, is_active=True))
-        # Update can_curate_kb, first_name, last_name if provided in kwargs or request (support both legacy and new frontend)
+            workspace = session.query(db.Workspace).filter(db.Workspace.workspace_id == workspace_id).first()
+            # DEPRECATED: No longer using UserRoleMap - UserMap contains role_id
+            # session.add(db.UserRoleMap(...))
+            session.add(db.UserMap(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                role_id=role_id,
+                is_active=True,
+                namespace=workspace.namespace if workspace else "default",
+                created_date=datetime.now(timezone.utc),
+                last_updated=datetime.now(timezone.utc)
+            ))
+        
+        # Update can_curate_kb, first_name, last_name if provided
         import inspect
         frame = inspect.currentframe()
-        args, _, _, values = inspect.getargvalues(frame)
+        _, _, _, values = inspect.getargvalues(frame)
+
         can_curate_kb = values.get('can_curate_kb', None)
         first_name = values.get('first_name', None)
         last_name = values.get('last_name', None)
+        
         user_map = session.query(db.UserMap).filter_by(user_id=user_id, workspace_id=workspace_id).first()
-        user_obj = session.query(db.User).filter_by(user_id=user_id).first()
-        if can_curate_kb is not None and user_map and hasattr(user_map, 'can_curate_kb'):
+        if caller_role_id == Role.WS_ADMIN.id and can_curate_kb is not None and user_map and hasattr(user_map, 'can_curate_kb'):
             user_map.can_curate_kb = can_curate_kb
+        
+        user_obj = session.query(db.User).filter_by(user_id=user_id).first()
         if first_name is not None and user_obj and hasattr(user_obj, 'first_name'):
             user_obj.first_name = first_name
         if last_name is not None and user_obj and hasattr(user_obj, 'last_name'):
             user_obj.last_name = last_name
+        
         session.commit()
         print(f'User {user_id} role updated to role id {role_id} in workspace {workspace_id}')
-        return {'response': f'User role updated successfully'}
+        return {'response': 'User role updated successfully'}
     except Exception as e:
         session.rollback()
         print(f"Error in update_workspace_user: {e}")
@@ -3201,30 +3242,16 @@ def check_user_presence_by_email(user_email: str, workspace_id: int):
                     is_flag: True
     """
     claims, jwt_user_id = get_current_user()
-    is_admin = claims.get("is_admin", False)
 
     session = db.Session()
     try:
         session.rollback()
 
-        # --- RBAC: Forge-X Admin OR Workspace Admin for this workspace ---
         has_access = False
-        if is_admin:
+
+        _, caller_ws_id = _get_assignable_role_ids(jwt_user_id, workspace_id)
+        if jwt_user_id == Role.WS_MANAGER.id or caller_ws_id == Role.WS_ADMIN.id:
             has_access = True
-        else:
-            workspace_admin_role = session.query(db.Role).filter(
-                db.Role.role_name.ilike("%workspace admin%"),
-                db.Role.is_active == True
-            ).first()
-            if workspace_admin_role:
-                caller_ws_role = session.query(db.UserRoleMap).filter(
-                    db.UserRoleMap.user_id == jwt_user_id,
-                    db.UserRoleMap.workspace_id == workspace_id,
-                    db.UserRoleMap.role_id == workspace_admin_role.role_id,
-                    db.UserRoleMap.is_active == True
-                ).first()
-                if caller_ws_role:
-                    has_access = True
 
         if not has_access:
             return {"error": "You are not authorized to perform this check. Admin or Workspace Admin required."}
