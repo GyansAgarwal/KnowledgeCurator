@@ -9,21 +9,21 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 # Third-party and internal imports
 sys.path.append("../utils")
-from ..utils.prompt_builder import PromptBuilder
-from ..utils.azurecustomllm import AzureCustomLLM
-from ..utils.classifier import classifier
-from ..utils.mcp_service_client import MCPServiceClient
+from kbcurator.utils.prompt_builder import PromptBuilder
+from kbcurator.utils.azurecustomllm import AzureCustomLLM
+from kbcurator.utils.classifier import classifier
+from kbcurator.utils.mcp_service_client import MCPServiceClient
 from ..server.server import mcp
 from ..server.main import session
-from ..utils.helpers import evaluate_user_input
+from kbcurator.utils.helpers import evaluate_user_input
 import difflib
-from ..utils.chatbot_context import ChatbotContext
+from kbcurator.utils.chatbot_context import ChatbotContext
 import re
 from urllib.parse import urlparse
-from ..utils.access_validation import validate_user_workspace_access
-from ..utils.request_context import request_var
+from kbcurator.utils.access_validation import validate_user_workspace_access
+from kbcurator.utils.request_context import request_var
 # from tools.userManagementSystem import Session, UserMap
-from ..utils.db import db
+from kbcurator.utils.db import db
 from fastmcp.server.dependencies import get_http_headers
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
@@ -212,7 +212,10 @@ class Chatbot:
         self.intent_detector = IntentDetector()
         self.session = session  # Use the module-level session manager from main
         
-        load_dotenv(os.path.abspath(os.path.join(os.getcwd(), '.env')))
+        # Load .env file if it exists (for local development)
+        env_path = os.path.abspath(os.path.join(os.getcwd(), '.env'))
+        if os.path.exists(env_path):
+            load_dotenv(env_path)
         server_url = os.environ.get("KC_SERVICE_URL")
         self.industry = industry
         self.sub_industry = sub_industry

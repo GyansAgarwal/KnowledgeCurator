@@ -7,7 +7,7 @@ import json
 import os
 from typing import List, Optional
 import uvicorn
-from .server import mcp
+from kbcurator.server.server import mcp
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -16,25 +16,24 @@ from starlette.responses import (
     PlainTextResponse,
     StreamingResponse,
 )
-from ..utils.auth import extract_token_from_headers
-from ..utils.sso_jwt import verify_token
-from ..utils.mongodb_singleton import get_mongodb_client
-from ..utils.request_context import request_var
-from ..utils.session_history_manager import SessionHistoryManager
+from kbcurator.utils.auth import extract_token_from_headers
+from kbcurator.utils.sso_jwt import verify_token
+from kbcurator.utils.mongodb_singleton import get_mongodb_client
+from kbcurator.utils.request_context import request_var
+from kbcurator.utils.session_history_manager import SessionHistoryManager
 
 # --- Initialize global services (DI singletons) ---
 mongo_client = get_mongodb_client()
 session = SessionHistoryManager(mongo_client)
 
 # --- Import tools so they are registered with MCP ---
-from ..tools import ingestion_new  # noqa: F401
-from ..tools import kb_adapter_tool  # noqa: F401
-from ..tools import kb_curator_chatbot  # noqa: F401
-from ..tools import user_management_system  # noqa: F401
-from ..tools import sso_login_tool  # noqa: F401
-from ..tools import account_status_tool  # noqa: F401
-from ..tools import sharepoint_agent  # SharePoint integration
-from ..tools import config
+from kbcurator.tools import ingestion_new  # noqa: F401
+from kbcurator.tools import kb_adapter_tool  # noqa: F401
+from kbcurator.tools import kb_curator_chatbot  # noqa: F401
+from kbcurator.tools import user_management_system  # noqa: F401
+from kbcurator.tools import sso_login_tool  # noqa: F401
+from kbcurator.tools import account_status_tool  # noqa: F401
+from kbcurator.tools import llm_router_tool  # noqa: F401
 # ---------------------------
 # Middleware
 # ---------------------------
@@ -53,6 +52,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "refresh_jwt_token",
         "query_rag",
         "upload_and_index_tool",
+        "use_llm_provider",
+        "query_llm_router_status",
+        "test_llm_generation",
     ]
 
     async def dispatch(self, request: Request, call_next):

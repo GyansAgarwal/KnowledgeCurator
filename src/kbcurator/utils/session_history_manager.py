@@ -9,7 +9,10 @@ from pymongo.server_api import ServerApi
 from bson.objectid import ObjectId
 from configparser import ConfigParser
 
-load_dotenv(os.path.abspath(os.path.join(os.getcwd(),'.env')))
+# Load .env file if it exists (for local development)
+env_path = os.path.abspath(os.path.join(os.getcwd(), '.env'))
+if os.path.exists(env_path):
+    load_dotenv(env_path)
 
 class SessionHistoryManager:
     def __init__(self, mongo_client):
