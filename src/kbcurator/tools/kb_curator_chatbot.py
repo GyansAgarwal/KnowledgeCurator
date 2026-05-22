@@ -212,7 +212,10 @@ class Chatbot:
         self.intent_detector = IntentDetector()
         self.session = session  # Use the module-level session manager from main
         
-        load_dotenv(os.path.abspath(os.path.join(os.getcwd(), '.env')))
+        # Load .env file if it exists (for local development)
+        env_path = os.path.abspath(os.path.join(os.getcwd(), '.env'))
+        if os.path.exists(env_path):
+            load_dotenv(env_path)
         server_url = os.environ.get("KC_SERVICE_URL")
         self.industry = industry
         self.sub_industry = sub_industry

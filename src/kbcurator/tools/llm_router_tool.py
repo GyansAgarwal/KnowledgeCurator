@@ -30,10 +30,28 @@ _ai_manager: Optional[ConfigurableAIManager] = None
 
 
 def get_ai_manager() -> ConfigurableAIManager:
-    """Get or create the global AI manager instance."""
+    """Get or create the global AI manager instance with Azure as default provider."""
     global _ai_manager
     if _ai_manager is None:
         _ai_manager = ConfigurableAIManager()
+        
+        # Auto-configure Azure as default provider if environment variables are available
+        try:
+            _ai_manager.configure_from_env("azure")
+            logger.info("Successfully auto-configured Azure as default provider")
+        except Exception as e:
+            logger.warning(f"Failed to auto-configure Azure from environment: {e}")
+            # Try manual configuration as fallback
+            try:
+                manual_config = _get_manual_config("azure")
+                if manual_config:
+                    _ai_manager.configure_provider("azure", manual_config)
+                    logger.info("Successfully configured Azure with manual fallback as default")
+                else:
+                    logger.warning("Azure environment variables not found, no default provider configured")
+            except Exception as manual_error:
+                logger.error(f"Failed to configure Azure manually: {manual_error}")
+    
     return _ai_manager
 
 
@@ -404,6 +422,57 @@ def reset_llm_router() -> Dict[str, Any]:
             "error_type": type(e).__name__
         }
         logger.error(f"LLM router reset error: {error_result}")
+        return error_result
+
+
+@mcp.tool()
+def check_default_azure_config() -> Dict[str, Any]:
+    """
+    Check if Azure is properly configured as the default provider.
+    
+    Returns:
+        Status of Azure default configuration
+    """
+    try:
+        manager = get_ai_manager()
+        
+        # Check if Azure is configured
+        configured_providers = manager.list_configured_providers()
+        current_provider = manager.get_current_provider()
+        
+        # Check Azure environment variables
+        azure_env_vars = {
+            "AZURE_OPENAI_API_KEY": "found" if os.getenv("AZURE_OPENAI_API_KEY") else "missing",
+            "AZURE_OPENAI_ENDPOINT": "found" if os.getenv("AZURE_OPENAI_ENDPOINT") else "missing",
+            "AZURE_OPENAI_CHAT_DEPLOYMENT": "found" if os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT") else "missing",
+            "AZURE_OPENAI_API_VERSION": "found" if os.getenv("AZURE_OPENAI_API_VERSION") else "missing"
+        }
+        
+        azure_configured = "azure" in configured_providers
+        azure_is_current = current_provider == "azure"
+        all_env_vars_present = all(status == "found" for status in azure_env_vars.values())
+        
+        result = {
+            "status": "success",
+            "azure_configured": azure_configured,
+            "azure_is_current_provider": azure_is_current,
+            "azure_environment_variables": azure_env_vars,
+            "all_azure_env_vars_present": all_env_vars_present,
+            "current_provider": current_provider,
+            "configured_providers": configured_providers,
+            "default_setup_successful": azure_configured and azure_is_current
+        }
+        
+        logger.info(f"Azure default config check result: {result}")
+        return result
+        
+    except Exception as e:
+        error_result = {
+            "status": "error",
+            "message": f"Failed to check Azure default config: {str(e)}",
+            "error_type": type(e).__name__
+        }
+        logger.error(f"Azure default config check error: {error_result}")
         return error_result
 
 
