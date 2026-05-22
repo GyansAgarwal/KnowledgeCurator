@@ -6,7 +6,6 @@ import asyncio
 import json
 import os
 from typing import List, Optional
-
 import uvicorn
 from .server import mcp
 from starlette.middleware import Middleware
@@ -34,6 +33,8 @@ from ..tools import kb_curator_chatbot  # noqa: F401
 from ..tools import user_management_system  # noqa: F401
 from ..tools import sso_login_tool  # noqa: F401
 from ..tools import account_status_tool  # noqa: F401
+from ..tools import sharepoint_agent  # SharePoint integration
+from ..tools import config
 # ---------------------------
 # Middleware
 # ---------------------------

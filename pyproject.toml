@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 # Replace with git URL in real usage:
 # common-adapters @ git+ssh://git@github.com/YOUR_ORG/common-adapters.git@v1.0.1
 dependencies = [
-  "common-adapters @ git+https://github.com/Coforge-forgeX/forgexpackages.git@main",
+  "common-adapters @ git+https://github.com/Coforge-forgeX/forgexpackages.git@sharepoint_pkg",
   "pandas>=2.3.0",
   "pyarrow>=20.0.0",
   "streamlit",
@@ -82,7 +82,6 @@ dependencies = [
   "requests",
   "configparser",
   "shiny",
-  "logging",
   "pytest>=8.4.1",
   "ragas>=0.2.15",
   "datasets>=3.6.0",
@@ -90,10 +89,11 @@ dependencies = [
   "pillow>=11.3.0",
   "gunicorn>=22.0.0",
   "nest-asyncio>=1.6.0",
+  "msal",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [project.scripts]
-kb-server = "kbcurator.server.main:http_app"
+kb-server = "..server.main:http_app"
