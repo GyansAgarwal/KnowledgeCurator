@@ -315,6 +315,9 @@ async def initialize_rag(domain: Optional[str] = None, kb_name: Optional[str] = 
             graph_storage="Neo4JStorage",
             workspace = lightrag_database,
             vector_storage="PGVectorStorage",
+            vector_db_storage_cls_kwargs={
+                "cosine_better_than_threshold": 0.0,  # LOWERED from 0.2 - was filtering all results
+            },
             chunk_token_size=1000,
             chunk_overlap_token_size=200,
         )
