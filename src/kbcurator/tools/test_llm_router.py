@@ -76,10 +76,10 @@ class LLMRouterTester:
         
         env_checks = {
             "azure": {
-                "AZURE_OPENAI_API_KEY": os.getenv("AZURE_OPENAI_API_KEY"),
-                "AZURE_OPENAI_ENDPOINT": os.getenv("AZURE_OPENAI_ENDPOINT"),
-                "AZURE_OPENAI_CHAT_DEPLOYMENT": os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT"),
-                "AZURE_OPENAI_API_VERSION": os.getenv("AZURE_OPENAI_API_VERSION")
+                "AZURE_OPENAI_LLM_MODEL_API_KEY": os.getenv("AZURE_OPENAI_LLM_MODEL_API_KEY"),
+                "AZURE_OPENAI_LLM_MODEL_API_BASE": os.getenv("AZURE_OPENAI_LLM_MODEL_API_BASE"),
+                "AZURE_OPENAI_LLM_MODEL_LLM_MODEL": os.getenv("AZURE_OPENAI_LLM_MODEL_LLM_MODEL"),
+                "AZURE_OPENAI_LLM_MODEL_API_VERSION": os.getenv("AZURE_OPENAI_LLM_MODEL_API_VERSION")
             },
             "openai": {
                 "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),

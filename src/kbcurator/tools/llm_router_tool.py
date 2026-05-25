@@ -168,10 +168,10 @@ def _get_manual_config(provider_name: str) -> Optional[Dict[str, Any]]:
         }
     
     elif provider_name == "azure":
-        api_key = os.getenv("AZURE_OPENAI_API_KEY")
-        endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-        deployment = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT")
-        api_version = os.getenv("AZURE_OPENAI_API_VERSION")
+        api_key = os.getenv("AZURE_OPENAI_LLM_MODEL_API_KEY")
+        endpoint = os.getenv("AZURE_OPENAI_LLM_MODEL_API_BASE")
+        deployment = os.getenv("AZURE_OPENAI_LLM_MODEL_LLM_MODEL")
+        api_version = os.getenv("AZURE_OPENAI_LLM_MODEL_API_VERSION")
         
         if not all([api_key, endpoint, deployment, api_version]):
             return None
@@ -234,10 +234,10 @@ def query_llm_router_status() -> Dict[str, Any]:
                 }
             elif provider == "azure":
                 env_vars["azure"] = {
-                    "api_key": "found" if os.getenv("AZURE_OPENAI_API_KEY") else "missing",
-                    "endpoint": "found" if os.getenv("AZURE_OPENAI_ENDPOINT") else "missing",
-                    "deployment": "found" if os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT") else "missing",
-                    "api_version": "found" if os.getenv("AZURE_OPENAI_API_VERSION") else "missing"
+                    "api_key": "found" if os.getenv("AZURE_OPENAI_LLM_MODEL_API_KEY") else "missing",
+                    "endpoint": "found" if os.getenv("AZURE_OPENAI_LLM_MODEL_API_BASE") else "missing",
+                    "deployment": "found" if os.getenv("AZURE_OPENAI_LLM_MODEL_LLM_MODEL") else "missing",
+                    "api_version": "found" if os.getenv("AZURE_OPENAI_LLM_MODEL_API_VERSION") else "missing"
                 }
             elif provider == "gcp":
                 env_vars["gcp"] = {
@@ -466,10 +466,10 @@ def check_default_azure_config() -> Dict[str, Any]:
         
         # Check Azure environment variables
         azure_env_vars = {
-            "AZURE_OPENAI_API_KEY": "found" if os.getenv("AZURE_OPENAI_API_KEY") else "missing",
-            "AZURE_OPENAI_ENDPOINT": "found" if os.getenv("AZURE_OPENAI_ENDPOINT") else "missing",
-            "AZURE_OPENAI_CHAT_DEPLOYMENT": "found" if os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT") else "missing",
-            "AZURE_OPENAI_API_VERSION": "found" if os.getenv("AZURE_OPENAI_API_VERSION") else "missing"
+            "AZURE_OPENAI_LLM_MODEL_API_KEY": "found" if os.getenv("AZURE_OPENAI_LLM_MODEL_API_KEY") else "missing",
+            "AZURE_OPENAI_LLM_MODEL_API_BASE": "found" if os.getenv("AZURE_OPENAI_LLM_MODEL_API_BASE") else "missing",
+            "AZURE_OPENAI_LLM_MODEL_LLM_MODEL": "found" if os.getenv("AZURE_OPENAI_LLM_MODEL_LLM_MODEL") else "missing",
+            "AZURE_OPENAI_LLM_MODEL_API_VERSION": "found" if os.getenv("AZURE_OPENAI_LLM_MODEL_API_VERSION") else "missing"
         }
         
         azure_configured = "azure" in configured_providers
@@ -505,10 +505,10 @@ def _get_required_env_vars(provider: str) -> List[str]:
     env_vars = {
         "openai": ["OPENAI_API_KEY"],
         "azure": [
-            "AZURE_OPENAI_API_KEY",
-            "AZURE_OPENAI_ENDPOINT", 
-            "AZURE_OPENAI_CHAT_DEPLOYMENT",
-            "AZURE_OPENAI_API_VERSION"
+            "AZURE_OPENAI_LLM_MODEL_API_KEY",
+            "AZURE_OPENAI_LLM_MODEL_API_BASE", 
+            "AZURE_OPENAI_LLM_MODEL_LLM_MODEL",
+            "AZURE_OPENAI_LLM_MODEL_API_VERSION"
         ],
         "gcp": ["GCP_PROJECT_ID", "GOOGLE_APPLICATION_CREDENTIALS"],
         "quasar": ["QUASAR_ENDPOINT_URL", "QUASAR_API_KEY", "QUASAR_MODEL"]
