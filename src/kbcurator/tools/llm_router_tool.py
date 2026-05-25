@@ -20,7 +20,8 @@ from common_adapters.configurableAI import ConfigurableAIManager
 from common_adapters.configurableAI.config import (
     OpenAIConfig, 
     AzureOpenAIConfig, 
-    GCPConfig
+    GCPConfig,
+    QuasarConfig
 )
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ def use_llm_provider(provider_name: str) -> Dict[str, Any]:
     Configure and switch to an LLM provider. Auto-fallback from env to manual configuration.
     
     Args:
-        provider_name: Name of the provider ('openai', 'azure', 'gcp')
+        provider_name: Name of the provider ('openai', 'azure', 'gcp', 'quasar')
     
     Returns:
         Configuration and switch result with status and details
@@ -113,7 +114,7 @@ def use_llm_provider(provider_name: str) -> Dict[str, Any]:
                     raise ValueError(f"No manual configuration available for {provider_name}")
                     
             except Exception as manual_error:
-                return {
+                error_result = {
                     "status": "error",
                     "action": "configuration_failed",
                     "message": f"Failed to configure {provider_name}",
@@ -124,6 +125,8 @@ def use_llm_provider(provider_name: str) -> Dict[str, Any]:
                     },
                     "required_env_vars": _get_required_env_vars(provider_name)
                 }
+                # Raise exception to set isError: true in MCP response
+                raise ValueError(f"Configuration failed for {provider_name}: {error_result['message']}")
         
         # Configuration successful, provider is now active
         result = {
@@ -148,7 +151,8 @@ def use_llm_provider(provider_name: str) -> Dict[str, Any]:
             "error_type": type(e).__name__
         }
         logger.error(f"LLM provider use error: {error_result}")
-        return error_result
+        # Re-raise to ensure isError: true in MCP response
+        raise
 
 
 def _get_manual_config(provider_name: str) -> Optional[Dict[str, Any]]:
@@ -192,6 +196,20 @@ def _get_manual_config(provider_name: str) -> Optional[Dict[str, Any]]:
             "credentials_path": credentials
         }
     
+    elif provider_name == "quasar":
+        endpoint_url = os.getenv("QUASAR_ENDPOINT_URL")
+        api_key = os.getenv("QUASAR_API_KEY")
+        model = os.getenv("QUASAR_MODEL", "claude-sonnet-4")
+        
+        if not all([endpoint_url, api_key]):
+            return None
+            
+        return {
+            "endpoint_url": endpoint_url,
+            "api_key": api_key,
+            "model": model
+        }
+    
     return None
 
 
@@ -208,7 +226,7 @@ def query_llm_router_status() -> Dict[str, Any]:
         
         # Get environment variable status for debugging
         env_vars = {}
-        for provider in ["openai", "azure", "gcp"]:
+        for provider in ["openai", "azure", "gcp", "quasar"]:
             if provider == "openai":
                 env_vars["openai"] = {
                     "api_key": "found" if os.getenv("OPENAI_API_KEY") else "missing",
@@ -225,6 +243,12 @@ def query_llm_router_status() -> Dict[str, Any]:
                 env_vars["gcp"] = {
                     "project_id": "found" if os.getenv("GCP_PROJECT_ID") else "missing",
                     "credentials": "found" if os.getenv("GOOGLE_APPLICATION_CREDENTIALS") else "missing"
+                }
+            elif provider == "quasar":
+                env_vars["quasar"] = {
+                    "endpoint_url": "found" if os.getenv("QUASAR_ENDPOINT_URL") else "missing",
+                    "api_key": "found" if os.getenv("QUASAR_API_KEY") else "missing",
+                    "model": "found" if os.getenv("QUASAR_MODEL") else "missing"
                 }
         
         result = {
@@ -342,7 +366,7 @@ async def test_llm_generation(
         
         # Generate text
         start_time = asyncio.get_event_loop().time()
-        response = await manager.generate_text(
+        response = await manager.generate_text_async(
             prompt,
             provider=test_provider,
             max_tokens=max_tokens,
@@ -486,6 +510,7 @@ def _get_required_env_vars(provider: str) -> List[str]:
             "AZURE_OPENAI_CHAT_DEPLOYMENT",
             "AZURE_OPENAI_API_VERSION"
         ],
-        "gcp": ["GCP_PROJECT_ID", "GOOGLE_APPLICATION_CREDENTIALS"]
+        "gcp": ["GCP_PROJECT_ID", "GOOGLE_APPLICATION_CREDENTIALS"],
+        "quasar": ["QUASAR_ENDPOINT_URL", "QUASAR_API_KEY", "QUASAR_MODEL"]
     }
     return env_vars.get(provider, [])
