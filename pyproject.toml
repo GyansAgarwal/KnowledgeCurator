@@ -82,6 +82,7 @@ dependencies = [
   "requests",
   "configparser",
   "shiny",
+  "logging",
   "pytest>=8.4.1",
   "ragas>=0.2.15",
   "datasets>=3.6.0",
@@ -96,4 +97,5 @@ dependencies = [
 where = ["src"]
 
 [project.scripts]
-kb-server = "..server.main:http_app"
+kb-server = "kbcurator.server.main:http_app"
+
