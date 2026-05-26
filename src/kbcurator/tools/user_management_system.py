@@ -805,18 +805,18 @@ def _validate_workspace_type_and_kbs(session, claims: dict, fields: dict):
     if kb_ids is None:
         kb_ids = []
     if not isinstance(kb_ids, list):
-        return None, None, {'error': "'kb_ids' must be a list of knowledge base IDs."}
+        return None, None, {'error': "KB Ids must be a list"}
 
     if selected_workspace_type == WorkspaceType.KG and len(kb_ids) != 1:
         return None, None, {
-            'error': "For workspace type 'KG', 'kb_ids' must contain exactly one ID."
+            'error': "Please select only one knowledge base when the workspace type is KG"
         }
 
     if kb_ids:
         try:
             kb_ids_int = [int(kb_id) for kb_id in kb_ids]
         except (TypeError, ValueError):
-            return None, None, {'error': "All values in 'kb_ids' must be integers."}
+            return None, None, {'error': "Invalid KB Ids"}
 
         # valid_kb_rows 
         valid_count = (
@@ -3252,7 +3252,7 @@ def check_user_presence_by_email(user_email: str, workspace_id: int):
 
         has_access = False
 
-        _, caller_ws_id = _get_assignable_role_ids(jwt_user_id, workspace_id)
+        _, caller_ws_id = _get_assignable_role_ids(session, jwt_user_id, workspace_id)
         if jwt_user_id == Role.WS_MANAGER.id or caller_ws_id == Role.WS_ADMIN.id:
             has_access = True
 

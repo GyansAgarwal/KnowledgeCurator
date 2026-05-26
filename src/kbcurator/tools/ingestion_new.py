@@ -11,7 +11,7 @@ from lightrag.llm.ollama import ollama_model_complete, ollama_embed
 from lightrag.llm.azure_openai import azure_openai_complete
 from lightrag.kg.shared_storage import initialize_share_data, initialize_pipeline_status
 import aiohttp
-from ..server.server import mcp
+from kbcurator.server.server import mcp
 import psycopg2
 from azure.storage.blob import BlobServiceClient
 from PyPDF2 import PdfReader
@@ -315,6 +315,9 @@ async def initialize_rag(domain: Optional[str] = None, kb_name: Optional[str] = 
             graph_storage="Neo4JStorage",
             workspace = lightrag_database,
             vector_storage="PGVectorStorage",
+            vector_db_storage_cls_kwargs={
+                "cosine_better_than_threshold": 0.0,  # LOWERED from 0.2 - was filtering all results
+            },
             chunk_token_size=1000,
             chunk_overlap_token_size=200,
         )
@@ -2653,18 +2656,35 @@ async def delete_relation_from_kg(
  
 @mcp.tool()
 async def edit_entity_in_kg(
-    domain: Optional[str] = None,
-    kb_name: Optional[str] = None,
+    domain: Optional[str] = None,       # Other
+    kb_name: Optional[str] = None,      # Demo Instances/
+    knowledge_bases: Optional[list] = [],  # [Cards, Payments]
+    workspace_id: Optional[str] = None, # 753
     entity_name: Optional[str] = None,
     updated_data: Optional[dict] = None,
 ):
     try:
-        rag = await initialize_rag(domain=domain, kb_name=kb_name)
-        return await rag.aedit_entity(
-            entity_name=entity_name,
-            updated_data=updated_data,
-            allow_rename = True
-        )
+        if workspace_id:
+            digit_map = {
+                '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
+                '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine'
+            }
+            workspace_id_alpha = ''.join(
+                c if c.isalpha() else digit_map[c]
+                for c in str(workspace_id) if c.isalpha() or c.isdigit()
+            )
+            knowledge_bases.append(workspace_id_alpha)
+            # knowledge_bases = [Cards, Payments, sevenfivethree]
+
+        results = {}
+        for kg in knowledge_bases:
+            rag = await initialize_rag(domain=domain, kb_name=kb_name + kg)  # Other + Demo Instances/ + Cards
+            results[kg] = await rag.aedit_entity(
+                entity_name=entity_name,
+                updated_data=updated_data,
+                allow_rename=True,
+            )
+        return results
     except Exception as e:
         return {"error": str(e)}
  
