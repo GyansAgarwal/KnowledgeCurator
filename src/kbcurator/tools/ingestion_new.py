@@ -299,6 +299,7 @@ def generate_download_url_for_file(
     except Exception as e:
         print(f"Error generating download URL for {file_path}: {e}")
         return None
+
 async def initialize_rag(domain: Optional[str] = None, kb_name: Optional[str] = None) -> LightRAG:
     data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
     lightrag_database = ''.join(char for char in f"{domain}{kb_name}" if char.isalpha())
@@ -315,9 +316,6 @@ async def initialize_rag(domain: Optional[str] = None, kb_name: Optional[str] = 
             graph_storage="Neo4JStorage",
             workspace = lightrag_database,
             vector_storage="PGVectorStorage",
-            vector_db_storage_cls_kwargs={
-                "cosine_better_than_threshold": 0.0,  # LOWERED from 0.2 - was filtering all results
-            },
             chunk_token_size=1000,
             chunk_overlap_token_size=200,
         )
@@ -2626,15 +2624,30 @@ async def insert_edge_to_kg(
  
 @mcp.tool()
 async def delete_entity_from_kg(
-    domain: Optional[str] = None,
-    kb_name: Optional[str] = None,
+    domain: Optional[str] = None,       # Other
+    kb_name: Optional[str] = None,      # Demo Instances/
+    knowledge_bases: Optional[list] = None,  # [Cards, Payments]
+    workspace_id: Optional[str] = None, # 753
     entity_name: Optional[str] = None,
 ):
     try:
-        rag = await initialize_rag(domain=domain, kb_name=kb_name)
-        return await rag.adelete_by_entity(
-            entity_name=entity_name,
-        )
+        knowledge_bases = list(knowledge_bases) if knowledge_bases else []
+        if workspace_id:
+            digit_map = {
+                '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
+                '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine'
+            }
+            workspace_id_alpha = ''.join(
+                c if c.isalpha() else digit_map[c]
+                for c in str(workspace_id) if c.isalpha() or c.isdigit()
+            )
+            knowledge_bases.append(workspace_id_alpha)
+
+        results = {}
+        for kg in knowledge_bases:
+            rag = await initialize_rag(domain=domain, kb_name=kb_name + kg)
+            results[kg] = await rag.adelete_by_entity(entity_name=entity_name)
+        return results
     except Exception as e:
         return {"error": str(e)}
    
@@ -2658,12 +2671,13 @@ async def delete_relation_from_kg(
 async def edit_entity_in_kg(
     domain: Optional[str] = None,       # Other
     kb_name: Optional[str] = None,      # Demo Instances/
-    knowledge_bases: Optional[list] = [],  # [Cards, Payments]
+    knowledge_bases: Optional[list] = None,  # [Cards, Payments]
     workspace_id: Optional[str] = None, # 753
     entity_name: Optional[str] = None,
     updated_data: Optional[dict] = None,
 ):
     try:
+        knowledge_bases = list(knowledge_bases) if knowledge_bases else []
         if workspace_id:
             digit_map = {
                 '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
@@ -2683,7 +2697,7 @@ async def edit_entity_in_kg(
                 entity_name=entity_name,
                 updated_data=updated_data,
                 allow_rename=True,
-            )
+                )
         return results
     except Exception as e:
         return {"error": str(e)}
