@@ -1,5 +1,5 @@
 from kbcurator.utils.access_validation import validate_user_workspace_access
-from kbcurator.utils.permission import is_admin
+from kbcurator.utils.permission import is_admin, get_user_role_id
 from ..server.server import mcp
 import psycopg2
 from configparser import ConfigParser
@@ -28,6 +28,7 @@ from kbcurator.utils.auth import (
     get_current_user
 )
 
+from datetime import datetime, timezone
 from kbcurator.utils.constants import DefaultValue, Role, WorkspaceType
 from kbcurator.services.agent_llm_configuration_service import agent_llm_config_service
 
@@ -137,9 +138,10 @@ def update_user_kb_toggle(user_id: int, workspace_id: int, can_curate_kb: bool):
     session = db.Session()
     try:
         session.rollback()
-        # Use is_admin to check if caller is workspace admin
-        if not is_admin(jwt_user_id, workspace_id):
-            return {"error": "Only Workspace Admin can update can_curate_kb for users in this workspace."}
+  
+        user_role_id = get_user_role_id(jwt_user_id, workspace_id)
+        if user_role_id != Role.WS_ADMIN.id and user_role_id != Role.WS_MANAGER.id:
+            return {"error": "Only Workspace Admin or Manager can update can_curate_kb for users in this workspace."}
 
         user_map = session.query(db.UserMap).filter(
             db.UserMap.user_id == user_id,
@@ -805,18 +807,18 @@ def _validate_workspace_type_and_kbs(session, claims: dict, fields: dict):
     if kb_ids is None:
         kb_ids = []
     if not isinstance(kb_ids, list):
-        return None, None, {'error': "'kb_ids' must be a list of knowledge base IDs."}
+        return None, None, {'error': "KB Ids must be a list"}
 
     if selected_workspace_type == WorkspaceType.KG and len(kb_ids) != 1:
         return None, None, {
-            'error': "For workspace type 'KG', 'kb_ids' must contain exactly one ID."
+            'error': "Please select only one knowledge base when the workspace type is KG"
         }
 
     if kb_ids:
         try:
             kb_ids_int = [int(kb_id) for kb_id in kb_ids]
         except (TypeError, ValueError):
-            return None, None, {'error': "All values in 'kb_ids' must be integers."}
+            return None, None, {'error': "Invalid KB Ids"}
 
         # valid_kb_rows 
         valid_count = (
@@ -1310,13 +1312,60 @@ def update_workspace(payload):
         if not ws:
             return {"error": "Workspace not found or inactive"}
 
-        # Extract and validate payload
+        # Extract payload
         fields = _extract_workspace_payload(payload)
+
+        # Workspace type is immutable after creation.
+        if 'keywords' in payload and payload.get('keywords') is not None:
+            requested_keywords = payload.get('keywords')
+            if isinstance(requested_keywords, list) and len(requested_keywords) == 1:
+                requested_workspace_type = str(requested_keywords[0]).strip().upper()
+                existing_workspace_type = (getattr(ws, 'keywords', None) or '').strip().upper()
+                if requested_workspace_type != existing_workspace_type:
+                    return {"error": "Workspace type cannot be updated."}
+            else:
+                return {"error": "Workspace type cannot be updated."}
+
+        # Get current mapping context for KB updates.
+        current_wiim = None
+        if db.WorkspaceIndustrySubIndustryMap:
+            current_wiim = session.query(db.WorkspaceIndustrySubIndustryMap).filter(
+                db.WorkspaceIndustrySubIndustryMap.workspace_id == workspace_id,
+                db.WorkspaceIndustrySubIndustryMap.is_active == True
+            ).first()
+
+        existing_workspace_type = (getattr(ws, 'keywords', None) or '').strip().upper()
+
         
-        # Validate workspace type and KBs (validates keywords and kb_ids)
-        normalized_keyword, kb_ids, validation_error = _validate_workspace_type_and_kbs(session, claims, fields)
-        if validation_error:
-            return validation_error
+        # Update WIIM mappings for KBs using existing industry/sub-industry context.
+        effective_intent = getattr(current_wiim, 'intent_id', None) if current_wiim else None
+        effective_industry = getattr(current_wiim, 'industry_id', None) if current_wiim else None
+        effective_sub_industry = getattr(current_wiim, 'subindustry_id', None) if current_wiim else None
+
+        # Industry, sub-industry, and intent are immutable after workspace creation.
+        # Ignore these fields from update payload and always rely on existing mapping context.
+        
+        should_update_kb_mappings = existing_workspace_type != WorkspaceType.KG.name and 'kb_ids' in payload
+        kb_ids = None
+        if should_update_kb_mappings:
+            kb_ids = fields.get('kb_ids')
+            if kb_ids is None:
+                kb_ids = []
+            if kb_ids and not isinstance(kb_ids, list):
+                return {'error': "KB Ids must be a list"}
+            if kb_ids:
+                try:
+                    kb_ids = [int(kb_id) for kb_id in kb_ids]
+                except (TypeError, ValueError):
+                    return {'error': "Invalid KB Ids"}
+
+                valid_count = (
+                    session.query(db.KnowledgeBase.id)
+                    .filter(db.KnowledgeBase.id.in_(kb_ids), db.KnowledgeBase.is_active.is_(True))
+                    .count()
+                )
+                if valid_count != len(kb_ids):
+                    return {'error': "Invalid KB selected."}
 
         # Update workspace master fields
         if fields.get('workspace_name'):
@@ -1325,27 +1374,21 @@ def update_workspace(payload):
             ws.workspace_desc = fields['workspace_desc']
         if fields.get('namespace'):
             ws.namespace = fields['namespace']
-        if normalized_keyword:
-            ws.keywords = normalized_keyword
         ws.last_updated = datetime.now(timezone.utc)
 
-        # Update WIIM mappings for KBs
-        industry = fields.get('industry')
-        sub_industry = fields.get('sub_industry')
-        intent = fields.get('intent')
-        if db.WorkspaceIndustrySubIndustryMap and industry and sub_industry and intent and kb_ids is not None:
+        if db.WorkspaceIndustrySubIndustryMap and effective_industry and effective_sub_industry and effective_intent and should_update_kb_mappings:
             session.query(db.WorkspaceIndustrySubIndustryMap).filter(
                 db.WorkspaceIndustrySubIndustryMap.workspace_id == workspace_id,
-                db.WorkspaceIndustrySubIndustryMap.industry_id == industry,
-                db.WorkspaceIndustrySubIndustryMap.subindustry_id == sub_industry,
-                db.WorkspaceIndustrySubIndustryMap.intent_id == intent
+                db.WorkspaceIndustrySubIndustryMap.industry_id == effective_industry,
+                db.WorkspaceIndustrySubIndustryMap.subindustry_id == effective_sub_industry,
+                db.WorkspaceIndustrySubIndustryMap.intent_id == effective_intent
             ).delete(synchronize_session=False)
             for kb_id in kb_ids:
                 session.add(db.WorkspaceIndustrySubIndustryMap(
                     workspace_id=workspace_id,
-                    industry_id=industry,
-                    subindustry_id=sub_industry,
-                    intent_id=intent,
+                    industry_id=effective_industry,
+                    subindustry_id=effective_sub_industry,
+                    intent_id=effective_intent,
                     kb_id=kb_id,
                     is_active=True
                 ))
@@ -3281,7 +3324,7 @@ def check_user_presence_by_email(user_email: str, workspace_id: int):
 
         has_access = False
 
-        _, caller_ws_id = _get_assignable_role_ids(jwt_user_id, workspace_id)
+        _, caller_ws_id = _get_assignable_role_ids(session, jwt_user_id, workspace_id)
         if jwt_user_id == Role.WS_MANAGER.id or caller_ws_id == Role.WS_ADMIN.id:
             has_access = True
 
