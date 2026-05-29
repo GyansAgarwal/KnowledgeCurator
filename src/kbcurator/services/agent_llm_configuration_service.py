@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import and_, text
 
-from ..utils.db import db
+from kbcurator.utils.db import db
 import logging
 
 logger = logging.getLogger(__name__)
