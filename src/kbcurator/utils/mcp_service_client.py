@@ -34,103 +34,107 @@ class MCPServiceClient:
     #         self.obj.set_token(token)
 
     async def query_rag(self, intent, user_message, history, workspace_id, role_id):
-        # Placeholder for MCP socket communication
         print(f"Calling MCP tool for intent: {intent} with message: {user_message}")
-        # print(f"Host: {self.host}, Port: {self.port}, Industry: {self.industry}, Sub-industry: {self.sub_industry}")
-        if str(role_id) == "34":
-            print(f"SME query")
-            pass
-        else:
-            digit_map = {
-                '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
-                '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine'
-            }
-            result = []
-            for c in workspace_id:
-                if c.isalpha():
-                    result.append(c)
-                elif c.isdigit():
-                    result.append(digit_map[c])
-                # skip non-alphanumeric characters
-            workspace_id_alpha = ''.join(result)
-            knowledge_bases = self.knowledge_bases
-            knowledge_bases.append(workspace_id_alpha)
+        
+        # Initialize kb_name
+        kb_name = self.sub_industry
+        
+        #knowledge_bases = []
+
+        # if str(role_id) == "34":
+        #     print(f"SME query")
+        #     pass
+        # else:
+        
+        # digit_map = {
+        #     '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
+        #     '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine'
+        # }
+        # result = []
+        # for c in workspace_id:
+        #     if c.isalpha():
+        #         result.append(c)
+        #     elif c.isdigit():
+        #         result.append(digit_map[c])
+        # workspace_id_alpha = ''.join(result)
+        # role_id_str = str(role_id) if role_id is not None else ""
+        # if role_id_str == "34":
+        #     # SME: keep original cross-KB behavior
+        #     knowledge_bases = self.knowledge_bases.copy()
+        # else:
+        #     # Workspace users: query only their workspace KB to avoid cross-scope contamination.
+        #     if workspace_id:
+        #         digit_map = {
+        #             '0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four',
+        #             '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine'
+        #         }
+        #         result = []
+        #         for c in str(workspace_id):
+        #             if c.isalpha():
+        #                 result.append(c)
+        #             elif c.isdigit():
+        #                 result.append(digit_map[c])
+        #         workspace_id_alpha = ''.join(result)
+        #         if workspace_id_alpha:
+        #             knowledge_bases = [workspace_id_alpha]
+       # knowledge_bases.append(workspace_id_alpha)
+            
+        # Modified kb_name for workspace isolation
+        # kb_name = f"{self.sub_industry}/{workspace_id_alpha}"
+        
         try: 
-            # arguments = {
-            # "domain": "Banking & Financial Services",
-            # "kb_name": "Asset & Wealth Management",
-            # "question": "what is wealth management",
-            # "history": [],
-            # "user_prompt": "",
-            # "mode": "mix"
-            # }
             arguments = {
-            "domain": self.industry,
-            "kb_name": self.sub_industry,
-            "question": user_message,
-            "history": history,
-            "knowledge_bases": knowledge_bases,
-            "user_prompt": "",
-            "mode": "mix"
+                "domain": self.industry,
+                "kb_name": kb_name,
+                "question": user_message,
+                "history": history,
+                "knowledge_bases": self.knowledge_bases,
+                "user_prompt": "",
+                "mode": "mix",
+                "workspace_id": workspace_id,  # ADD THIS
+                "role_id": role_id              # ADD THIS
             }
 
             tool_name = "query_rag"
-            # print("Arguements for RAG query tool:", arguments)
-            # await self.obj.connect_to_server()
             print("Connected to MCP server for RAG query.")
-            # print(self._token)
-            # response = await self.obj.session.call_tool(
-            #     name=tool_name,
-            #     arguments=arguments
-            # )
             token = self._token if self._token else ""
-            # async with Client(
-            #     transport=StreamableHttpTransport(
-            #         url=self.server_url,
-            #         headers={"Authorization": token},
-            #     ),
-            # ) as client:
-            #     response = await client.call_tool(
-            #         name = tool_name,
-            #         arguments = arguments
-            #     )
-
-            await self.obj.connect_to_server()
-            print("Connected to MCP server for RAG query.")
-            response = await self.obj.session.call_tool(
-                name=tool_name,
-                arguments=arguments 
-            )
+            async with Client(
+                transport=StreamableHttpTransport(
+                    url=self.server_url,
+                    headers={"Authorization": token},
+                ),
+            ) as client:
+                response = await client.call_tool(
+                    name=tool_name,
+                    arguments=arguments
+                )
             print("Received response from MCP server for RAG query.")
-            await self.obj.cleanup()
-
-            text_value = response.structuredContent
-            # await self.obj.cleanup()
-            lightrag_text = text_value["LightRAG"] if text_value else ""
-            print("Response from LightRAG:", lightrag_text[:10])
-            return lightrag_text
+                
+            text_value = response.structured_content
+            
+            # Check if response has structured format with sources
+            if text_value and isinstance(text_value, dict):
+                if "sources" in text_value:
+                    # Return full structured response with sources
+                    return {
+                        "response": text_value.get("LightRAG", text_value.get("response", "")),
+                        "sources": text_value.get("sources", []),
+                        "task_ids": text_value.get("task_ids", [])
+                    }
+                else:
+                    # Backward compatibility: return text and preserve optional task_ids.
+                    lightrag_text = text_value.get("LightRAG", text_value.get("response", ""))
+                    print("Response from LightRAG:", lightrag_text[:10])
+                    return {
+                        "response": lightrag_text,
+                        "task_ids": text_value.get("task_ids", [])
+                    }
+            else:
+                return ""
         
-            '''arguments = {
-            "domain": self.industry,
-            "kb_name": self.sub_industry,
-            "question": user_message,
-            "history": history
-            }'''
-
-            # call the aitl_reviewer tool with the response, state, and uuid
-            # tool_name = "extract_text_from_query"
-            # self.obj.connect_to_server()
-            # response = await self.obj.session.call_tool(
-            #    name=tool_name, 
-            #    arguments=arguments
-            # )
-            # text_value = response.content[0].text
-            # lightrag_text = json.loads(text_value)["LightRAG"]
-            # self.obj.cleanup()
-
         except Exception as e:
-            print(f"An error occurred while processing your request: {e}")
-            return "Unable to process your request at this time. Please try again later."
+            print(f"Error calling MCP tool: {e}")
+            return f"Error: {e}"
     
     async def upload_rag(self, intent, file_names, workspace_id, user_id, role_id, file_contents):
         """
