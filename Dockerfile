@@ -30,7 +30,6 @@ RUN playwright install --with-deps chromium
 # ✅ ADD THIS LINE
 RUN pip install gunicorn uvicorn
 
-
 # Install Playwright browsers
 RUN playwright install --with-deps chromium
 
