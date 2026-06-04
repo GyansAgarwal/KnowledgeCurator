@@ -3,17 +3,17 @@ on:
   workflow_dispatch: 
   push:
     branches:
-      - kb-cicd
+      - main
     paths:    
       - 'src/kbcurator/**'
       - 'Dockerfile'
       - '.github/workflows/python-kb-dev-agents.yaml'
    
 env:
-  AZURE_WEBAPP_NAME: forgeX-dev-kb-poly                     
+  AZURE_WEBAPP_NAME: forgeX2-kb                     
   REGISTRY: ${{ secrets.registry }}
-  DOCKER_IMAGE_NAME: dev-poly-kbcurator
-  rg_name: ${{ secrets.DEV_RG_NAME }}
+  DOCKER_IMAGE_NAME: prod-poly-kbcurator
+  rg_name: ${{ secrets.PROD_RG_NAME }}
   subscription_id: ${{ secrets.subscription_id }}
 
 jobs:
