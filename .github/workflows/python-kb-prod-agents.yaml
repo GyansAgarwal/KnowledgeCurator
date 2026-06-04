@@ -7,7 +7,7 @@ on:
     paths:    
       - 'src/kbcurator/**'
       - 'Dockerfile'
-      - '.github/workflows/python-kb-dev-agents.yaml'
+      - '.github/workflows/python-kb-prod-agents.yaml'
    
 env:
   AZURE_WEBAPP_NAME: forgeX2-kb                     
